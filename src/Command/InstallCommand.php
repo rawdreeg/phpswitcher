@@ -97,7 +97,7 @@ class InstallCommand extends Command
         );
 
         // TODO: Version resolution is simplified for macOS only currently.
-        $resolved = $this->_resolveVersion($requestedVersion, $output);
+        $resolved = $this->resolveVersion($requestedVersion, $output);
         if (null === $resolved) {
             $output->writeln('<error>Could not resolve requested PHP version.</error>');
 
@@ -169,7 +169,7 @@ class InstallCommand extends Command
      *                                                           package name and full version,
      *                                                           or null on failure.
      */
-    private function _resolveVersion(string $requestedVersion, OutputInterface $output): ?array
+    private function resolveVersion(string $requestedVersion, OutputInterface $output): ?array
     {
         $output->writeln(
             sprintf(
@@ -193,33 +193,5 @@ class InstallCommand extends Command
         );
 
         return null;
-    }
-
-    /**
-     * Helper function to check if a command exists.
-     *
-     * @param string $command The command name to check.
-     *
-     * @return bool True if the command exists, false otherwise.
-     */
-    private function _commandExists(string $command): bool
-    {
-        try {
-            $checkCmd = OperatingSystem::isWindows()
-                ? "where {$command} > NUL 2>&1"
-                : "command -v {$command} > /dev/null 2>&1 || which {$command} > /dev/null 2>&1";
-
-            // TODO: Test Windows command execution robustness
-            $process = new Process(['sh', '-c', $checkCmd]);
-            if (OperatingSystem::isWindows()) {
-                $process = new Process(['cmd', '/c', $checkCmd]);
-            }
-
-            $process->mustRun();
-
-            return true;
-        } catch (ProcessFailedException $e) {
-            return false;
-        }
     }
 }
