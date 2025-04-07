@@ -4,7 +4,7 @@ set -e # Exit on errors
 
 # --- Configuration ---
 # TODO: Maybe we should be getting the version dynamically (e.g., from a VERSION file or git tag)
-VERSION="0.1.0"
+VERSION="0.1.1"
 ARCHIVE_NAME="phpswitcher.tar.gz"
 BUILD_DIR="_build"
 STAGING_DIR="$BUILD_DIR/phpswitcher-$VERSION"

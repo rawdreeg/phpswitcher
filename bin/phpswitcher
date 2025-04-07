@@ -13,7 +13,7 @@ use Rawdreeg\PhpSwitcher\Command\InstallCommand;
 use Rawdreeg\PhpSwitcher\Command\UseCommand;
 use Symfony\Component\Console\Application;
 
-$application = new Application( 'PHP Switcher', '0.1.0' ); // TODO: Get version dynamically
+$application = new Application( 'PHP Switcher', '0.1.1' ); // TODO: Get version dynamically
 
 // Register commands
 $application->add( new InstallCommand() );

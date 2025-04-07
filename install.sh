@@ -7,7 +7,7 @@ export PHPSWITCHER_DIR="${PHPSWITCHER_DIR:-$HOME/.phpswitcher}"
 INSTALL_DIR="$PHPSWITCHER_DIR"
 # TODO: Replace hardcoded URL with logic to get latest release artifact URL from GitHub API
 # Example: LATEST_RELEASE_URL=$(curl -s https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'browser_download_url.*phpswitcher\.tar\.gz' | cut -d '"' -f 4)
-ARTIFACT_URL="https://github.com/rawdreeg/phpswitcher/releases/download/v0.1.0/phpswitcher.tar.gz" # <<< REPLACE THIS
+ARTIFACT_URL="https://github.com/rawdreeg/phpswitcher/releases/download/v0.1.1/phpswitcher.tar.gz" # <<< REPLACE THIS
 ARTIFACT_NAME="phpswitcher.tar.gz"
 
 # Helper function for printing messages
@@ -18,7 +18,7 @@ echo_message() {
 echo_error() {
   printf "\n\033[0;31m%s\033[0m\n" "$1" >&2
 }
-
+x
 # Function to compare semantic versions (a >= b)
 version_ge() {
   printf '%s\n%s\n' "$2" "$1" | sort -V -C
