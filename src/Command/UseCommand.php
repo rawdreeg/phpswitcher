@@ -50,7 +50,7 @@ class UseCommand extends Command
      *
      * @var string|null
      */
-    protected static $defaultDescription = 'Switches the active PHP version (macOS/Homebrew only).';
+    protected static $defaultDescription = 'Switches the active PHP version (macOS/Linux).';
 
     /**
      * Configures the command.
@@ -77,15 +77,6 @@ class UseCommand extends Command
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        // Ensure running on macOS
-        if (!OperatingSystem::isMac()) {
-            $output->writeln(
-                '<error>The \'use\' command currently only supports macOS with Homebrew.</error>'
-            );
-
-            return Command::FAILURE;
-        }
-
         $requestedVersion = $input->getArgument('version');
 
         // Validate version format (X.Y)
@@ -100,8 +91,48 @@ class UseCommand extends Command
             return Command::FAILURE;
         }
 
+        if (OperatingSystem::isMac()) {
+            return $this->switchMac($requestedVersion, $output);
+        }
+
+        // If not macOS, check Linux
+        if (OperatingSystem::isLinux()) {
+            // Basic Linux support (Debian/Ubuntu update-alternatives for now)
+            if ($this->commandExists('update-alternatives')) {
+                $output->writeln('<info>Detected Debian/Ubuntu Linux. Preparing to use update-alternatives...</info>');
+
+                return $this->switchDebian($requestedVersion, $output);
+            }
+
+            // If command doesn't exist or other Linux
+            $output->writeln('<error>Unsupported Linux distribution. Only Debian/Ubuntu (with update-alternatives) is currently supported for switching.</error>');
+
+            return Command::FAILURE;
+        }
+
+        // If not macOS or Linux
+        $output->writeln(
+            sprintf(
+                '<error>Unsupported OS: %s. Only macOS and Linux are supported.</error>',
+                OperatingSystem::getFamily()
+            )
+        );
+
+        return Command::FAILURE;
+    }
+
+    /**
+     * Handles switching PHP versions on macOS using Homebrew link/unlink.
+     *
+     * @param string          $requestedVersion The target version (e.g., 8.1).
+     * @param OutputInterface $output           For logging.
+     *
+     * @return int Command exit code.
+     */
+    private function switchMac(string $requestedVersion, OutputInterface $output): int
+    {
         $targetPackage = 'php@'.$requestedVersion;
-        $output->writeln(sprintf('Attempting to switch to %s...', $targetPackage));
+        $output->writeln(sprintf('Attempting to switch to %s via Homebrew...', $targetPackage));
 
         // 1. Check if target version is installed via Homebrew
         try {
@@ -187,5 +218,93 @@ class UseCommand extends Command
         }
 
         return Command::SUCCESS;
+    }
+
+    /**
+     * Handles switching PHP versions on Debian/Ubuntu using update-alternatives.
+     *
+     * @param string          $requestedVersion The target version (e.g., 8.1).
+     * @param OutputInterface $output           For logging.
+     *
+     * @return int Command exit code.
+     */
+    private function switchDebian(string $requestedVersion, OutputInterface $output): int
+    {
+        // Determine expected path (common location for APT installs)
+        $phpExecutablePath = '/usr/bin/php'.$requestedVersion;
+        $output->writeln(sprintf('Attempting to switch to %s via update-alternatives...', $phpExecutablePath));
+
+        // 1. Check if the target PHP executable exists
+        if (!file_exists($phpExecutablePath)) {
+            $output->writeln(
+                sprintf(
+                    '<error>Target PHP executable %s not found. Is PHP %s installed correctly via APT?</error>',
+                    $phpExecutablePath,
+                    $requestedVersion
+                )
+            );
+            $output->writeln(
+                sprintf('Please run `phpswitcher install %s` first.', $requestedVersion)
+            );
+
+            return Command::FAILURE;
+        }
+
+        // 2. Execute update-alternatives --set
+        $output->writeln('<comment>This may require sudo privileges.</comment>');
+        $output->writeln(sprintf('Running: sudo update-alternatives --set php %s', $phpExecutablePath));
+        $switchProcess = new Process(['sudo', 'update-alternatives', '--set', 'php', $phpExecutablePath]);
+
+        try {
+            $switchProcess->mustRun(
+                function ($type, $buffer) use ($output) {
+                    $output->write($buffer);
+                }
+            );
+            $output->writeln(sprintf('<info>Successfully set default PHP to %s!</info>', $phpExecutablePath));
+            $output->writeln('<comment>Changes should take effect immediately.</comment>');
+
+            return Command::SUCCESS;
+        } catch (ProcessFailedException $e) {
+            $output->writeln(
+                sprintf(
+                    '<error>Failed to set update-alternatives for %s: %s</error>',
+                    $phpExecutablePath,
+                    $e->getMessage()
+                )
+            );
+            // Provide hints
+            if (str_contains($e->getMessage(), 'is not managed using update-alternatives')) {
+                $output->writeln('<comment>Hint: PHP might not be managed by update-alternatives on this system.</comment>');
+            } elseif (str_contains($e->getMessage(), 'no alternatives for php')) {
+                $output->writeln('<comment>Hint: PHP alternatives might not be configured. You may need to run `sudo update-alternatives --install /usr/bin/php php /usr/bin/phpX.Y PRIORITY` for each installed version first.</comment>');
+            } elseif (str_contains($e->getMessage(), 'permission denied') || str_contains($e->getMessage(), 'not in the sudoers file')) {
+                $output->writeln('<comment>Hint: Switching requires sudo privileges.</comment>');
+            }
+
+            return Command::FAILURE;
+        }
+    }
+
+    /**
+     * Helper function to check if a command exists.
+     *
+     * @param string $command The command name to check.
+     *
+     * @return bool True if the command exists, false otherwise.
+     */
+    private function commandExists(string $command): bool
+    {
+        try {
+            // Use 'command -v' which is more POSIX compliant than 'which'
+            $checkCmd = "command -v {$command} > /dev/null 2>&1";
+
+            $process = new Process(['sh', '-c', $checkCmd]);
+            $process->mustRun();
+
+            return true;
+        } catch (ProcessFailedException $e) {
+            return false;
+        }
     }
 }
