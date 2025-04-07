@@ -18,7 +18,7 @@ echo_message() {
 echo_error() {
   printf "\n\033[0;31m%s\033[0m\n" "$1" >&2
 }
-x
+
 # Function to compare semantic versions (a >= b)
 version_ge() {
   printf '%s\n%s\n' "$2" "$1" | sort -V -C
