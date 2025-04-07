@@ -1,0 +1,23 @@
+#!/usr/bin/env php
+<?php
+
+// Check for vendor/autoload.php and provide a helpful error message if missing
+$autoloader = __DIR__ . '/../vendor/autoload.php';
+if ( !file_exists( $autoloader ) ) {
+    fwrite( STDERR, "Error: Composer dependencies not installed. Please run install script or ensure vendor/autoload.php exists.\n" );
+    exit( 1 );
+}
+require $autoloader;
+
+use Rawdreeg\PhpSwitcher\Command\InstallCommand;
+use Rawdreeg\PhpSwitcher\Command\UseCommand;
+use Symfony\Component\Console\Application;
+
+$application = new Application( 'PHP Switcher', '0.1.0' ); // TODO: Get version dynamically
+
+// Register commands
+$application->add( new InstallCommand() );
+$application->add( new UseCommand() );
+// TODO: Add ListCommand
+
+$application->run();

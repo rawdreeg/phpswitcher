@@ -1,0 +1,28 @@
+/vendor/
+/composer.lock
+
+# Cache/log files
+/logs/
+*.log
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Temporary files
+*.tmp
+tmp/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE / Editor specific files
+.idea/
+.vscode/
+*.sublime-* 
+
+# php-cs-fixer
+.php-cs-fixer.cache
