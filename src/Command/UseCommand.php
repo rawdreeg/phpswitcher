@@ -62,8 +62,8 @@ class UseCommand extends Command
         $this
             ->addArgument(
                 'version',
-                InputArgument::REQUIRED,
-                'The PHP version to switch to (e.g., 8.1)'
+                InputArgument::OPTIONAL,
+                'Target PHP version (e.g., 8.1). Detects from composer.json if omitted.'
             );
     }
 
@@ -87,8 +87,56 @@ class UseCommand extends Command
         }
 
         $requestedVersion = $input->getArgument('version');
+        $detectedVersionSource = null;
 
-        // Validate version format (X.Y)
+        // --- Version Auto-Detection ---
+        if (null === $requestedVersion) {
+            $output->writeln('<info>Version argument missing, attempting detection from composer.json...</info>');
+            $composerJsonPath = getcwd().'/composer.json';
+
+            if (file_exists($composerJsonPath)) {
+                $output->writeln(sprintf('Found %s', $composerJsonPath));
+                $composerJsonContent = @file_get_contents($composerJsonPath);
+                if (false === $composerJsonContent) {
+                    $output->writeln('<warning>Could not read composer.json.</warning>');
+                } else {
+                    $composerData = @json_decode($composerJsonContent, true);
+                    if (JSON_ERROR_NONE !== json_last_error()) {
+                        $output->writeln('<warning>Could not parse composer.json: '.json_last_error_msg().'</warning>');
+                    } else {
+                        // Check require.php first, then config.platform.php
+                        $constraint = $composerData['require']['php'] ?? $composerData['config']['platform']['php'] ?? null;
+
+                        if ($constraint) {
+                            $output->writeln(sprintf('Found PHP constraint: "%s"', $constraint));
+                            // Improved extraction: Find the first X.Y or X.Y.Z pattern
+                            if (preg_match('/(\d+\.\d+)/ ', $constraint, $matches)) {
+                                $requestedVersion = $matches[1]; // Extract only X.Y
+                                $detectedVersionSource = 'composer.json';
+                                $output->writeln(sprintf('<info>Detected target version %s from %s constraint \'%s\'.</info>', $requestedVersion, $detectedVersionSource, $constraint));
+                            } else {
+                                $output->writeln(sprintf('<warning>Could not extract an X.Y version from constraint \'%s\'. Please specify version manually.</warning>', $constraint));
+                            }
+                        } else {
+                            $output->writeln('<info>No PHP version constraint (require.php or config.platform.php) found in composer.json.</info>');
+                        }
+                    }
+                }
+            } else {
+                $output->writeln('<info>No composer.json found in current directory.</info>');
+            }
+
+            // If after detection, version is still null, fail.
+            if (null === $requestedVersion) {
+                $output->writeln('<error>PHP version not specified and could not be detected automatically.</error>');
+                $output->writeln(sprintf('Usage: phpswitcher %s [<version>]', $this->getName()));
+
+                return Command::FAILURE;
+            }
+        }
+        // --- End Detection ---
+
+        // Validate version format (X.Y) - use the version from arg or detected
         if (!preg_match('/^\d+\.\d+$/', $requestedVersion)) {
             $output->writeln(
                 sprintf(
