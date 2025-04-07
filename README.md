@@ -33,7 +33,7 @@ phpswitcher --version
 
 ## Installation from Source (for Development)
 
-1.  Clone the repository: `git clone ...`
+1.  Clone the repository: `git clone https://github.com/rawdreeg/phpswitcher.git`
 2.  Navigate into the project directory: `cd phpswitcher`.
 3.  Run the *local* setup script: `bash install.sh`.
     *Note: Running the script locally like this is intended for development. It checks dependencies and builds the PHAR in the `bin/` directory.*
