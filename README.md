@@ -20,7 +20,7 @@ Run the following command in your terminal to download and execute the installat
 ```bash
 # Ensure you have curl installed
 # Download and run the installer script
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/rawdreeg/phpswitcher/v0.1.0/install.sh)" 
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/rawdreeg/phpswitcher/v0.1.1/install.sh)" 
 ```
 
 Follow any prompts from the script. You may need to enter your password for `sudo` commands if installing to a system-wide directory like `/usr/local/bin`.
