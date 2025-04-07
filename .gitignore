@@ -26,3 +26,6 @@ Desktop.ini
 
 # php-cs-fixer
 .php-cs-fixer.cache
+
+# Build archive
+phpswitcher.tar.gz
