@@ -1,26 +1,43 @@
 # PHP Switcher
 
 A simple CLI tool to manage multiple PHP versions on macOS using Homebrew.
-(Linux and Windows support planned).
+(Currently only supports macOS with Homebrew. Linux/Windows support is planned).
 
 ## Features
 
 *   Install specific PHP versions (via Homebrew).
 *   Switch the active linked PHP version (via Homebrew).
 
-## Installation
+## Prerequisites
 
-1.  **Ensure Composer is installed:** [Install Composer](https://getcomposer.org/download/)
-2.  **Require the package globally:**
-    ```bash
-    composer global require rawdreeg/phpswitcher
-    ```
-3.  **Ensure Composer's global bin directory is in your PATH:**
-    Add the following line to your shell profile (`~/.zshrc`, `~/.bash_profile`, etc.) if it's not already there:
-    ```bash
-    export PATH="$HOME/.composer/vendor/bin:$PATH"
-    ```
-    Then reload your profile (`source ~/.zshrc` or restart your terminal).
+*   **macOS:** The current version only supports macOS.
+*   **Homebrew:** Required for installing and managing PHP versions. Ensure it's installed: [https://brew.sh/](https://brew.sh/)
+
+## Installation (Recommended)
+
+Run the following command in your terminal to download and execute the installation script:
+
+```bash
+# Ensure you have curl installed
+# Download and run the installer script
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/rawdreeg/phpswitcher/v0.1.0/install.sh)" 
+```
+
+Follow any prompts from the script. You may need to enter your password for `sudo` commands if installing to a system-wide directory like `/usr/local/bin`.
+
+After installation, open a **new terminal session** or run `source ~/.zshrc` (or the equivalent for your shell, like `source ~/.bash_profile`) and verify with:
+
+```bash
+phpswitcher --version
+```
+
+## Installation from Source (for Development)
+
+1.  Clone the repository: `git clone ...`
+2.  Navigate into the project directory: `cd phpswitcher`.
+3.  Run the *local* setup script: `bash install.sh`.
+    *Note: Running the script locally like this is intended for development. It checks dependencies and builds the PHAR in the `bin/` directory.*
+4.  Test commands using the locally built executable: `./bin/phpswitcher install 8.2`.
 
 ## Usage
 
@@ -39,11 +56,11 @@ phpswitcher install 7.4
 
 ```bash
 phpswitcher use <version>
-# Example:
+# Example (ensure the version is installed first):
 phpswitcher use 8.1 
 ```
 
-**Check current PHP version:**
+**Check active PHP version (after switching):**
 
 ```bash
 php --version
@@ -52,9 +69,10 @@ php --version
 ## Development
 
 1.  Clone the repository.
-2.  Navigate into the project directory: `cd phpswitcher`
-3.  Install dependencies: `composer install`
-4.  Run commands directly: `./bin/phpswitcher install 8.2`
+2.  Navigate into the project directory: `cd phpswitcher`.
+3.  Install dependencies: `composer install`.
+4.  Run the setup script (this installs dependencies including Homebrew if missing): `bash install.sh`.
+5.  Run commands directly using the local executable: `./bin/phpswitcher install 8.2`.
 
 ## Contributing
 
