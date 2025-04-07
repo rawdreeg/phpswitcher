@@ -45,16 +45,22 @@ phpswitcher --version
 
 **Install a PHP version:**
 
+Similar to the `use` command, if you are in a directory containing a `composer.json` file with a PHP requirement, you can omit the `<version>` argument to automatically detect and install the required `X.Y` version.
+
 ```bash
-phpswitcher install <version>
-# Example:
+phpswitcher install [<version>]
+# Examples:
 phpswitcher install 8.1
 phpswitcher install 7.4
+
+# Auto-detect from composer.json in current directory:
+cd my-project-using-php8.0/
+phpswitcher install
 ```
 
 **Switch active PHP version:**
 
-If you are in a directory containing a `composer.json` file with a PHP requirement ('php' key under 'require' or 'config.platform.php'), you can omit the `<version>` argument, and `phpswitcher` will attempt to detect and use the appropriate `X.Y` version.
+If you are in a directory containing a `composer.json` file with a PHP requirement (`require.php` or `config.platform.php`), you can omit the `<version>` argument, and `phpswitcher` will attempt to detect and use the appropriate `X.Y` version.
 
 ```bash
 phpswitcher use [<version>]
