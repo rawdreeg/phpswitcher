@@ -119,7 +119,7 @@ class InstallCommand extends Command
             // If after detection, version is still null, fail.
             if (null === $requestedVersion) {
                 $output->writeln('<error>PHP version not specified and could not be detected automatically.</error>');
-                $output->writeln(sprintf('Usage: %s install [<version>]', $this->getName()));
+                $output->writeln(sprintf('Usage: phpswitcher %s [<version>]', $this->getName()));
 
                 return Command::FAILURE;
             }
