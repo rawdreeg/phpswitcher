@@ -5,9 +5,8 @@ set -e # Exit immediately if a command exits with a non-zero status.
 # Define installation directory
 export PHPSWITCHER_DIR="${PHPSWITCHER_DIR:-$HOME/.phpswitcher}"
 INSTALL_DIR="$PHPSWITCHER_DIR"
-# TODO: Replace hardcoded URL with logic to get latest release artifact URL from GitHub API
-# Example: LATEST_RELEASE_URL=$(curl -s https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'browser_download_url.*phpswitcher\.tar\.gz' | cut -d '"' -f 4)
-ARTIFACT_URL="https://github.com/rawdreeg/phpswitcher/releases/download/v0.1.1/phpswitcher.tar.gz" # <<< REPLACE THIS
+
+ARTIFACT_URL=$(curl -s https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'browser_download_url.*phpswitcher\.tar\.gz' | cut -d '"' -f 4)
 ARTIFACT_NAME="phpswitcher.tar.gz"
 
 # Helper function for printing messages
