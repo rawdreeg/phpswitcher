@@ -249,7 +249,15 @@ class InstallCommand extends Command
 
         if (OperatingSystem::isMac()) {
             // Homebrew uses php@X.Y format for formulae.
-            // TODO: Add `brew search php@X.Y` check to confirm formula existence before assuming.
+            // Check if the formula exists in Homebrew
+            $process = new Process(['brew', 'search', 'php@'.$requestedVersion]);
+            $process->run();
+            
+            if (!$process->isSuccessful() || !str_contains($process->getOutput(), 'php@'.$requestedVersion)) {
+                $output->writeln(sprintf('<error>PHP version %s not found in Homebrew. Available versions can be found with `brew search php`.</error>', $requestedVersion));
+
+                return null;
+            }
 
             $packageName = 'php@'.$requestedVersion;
             $output->writeln(sprintf('Assuming Homebrew package: %s', $packageName));
