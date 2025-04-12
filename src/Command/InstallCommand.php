@@ -24,6 +24,8 @@ use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Process\Process;
 use Symfony\Component\Process\Exception\ProcessFailedException;
+use Symfony\Component\Console\Question\Question;
+use Symfony\Component\Console\Input\ArrayInput;
 
 /**
  * Command to install a specific PHP version.
@@ -190,7 +192,26 @@ class InstallCommand extends Command
                     return Command::FAILURE;
                 }
             }
-            // TODO: After successful install, offer to automatically run 'use' command?
+            // Ask user if they want to switch to this version now
+            $helper = $this->getHelper('question');
+            $question = new Question(
+                sprintf('Would you like to switch to PHP %s now? (y/N) ', $fullVersion),
+                false
+            );
+            $question->setValidator(function ($answer) {
+                return strtolower($answer) === 'y';
+            });
+
+            if ($helper->ask($input, $output, $question)) {
+                $useCommand = $this->getApplication()->find('use');
+                $arguments = [
+                    'command' => 'use',
+                    'version' => $fullVersion,
+                ];
+                $useInput = new ArrayInput($arguments);
+
+                return $useCommand->run($useInput, $output);
+            }
         } else {
             $output->writeln(
                 sprintf(
@@ -229,6 +250,7 @@ class InstallCommand extends Command
         if (OperatingSystem::isMac()) {
             // Homebrew uses php@X.Y format for formulae.
             // TODO: Add `brew search php@X.Y` check to confirm formula existence before assuming.
+
             $packageName = 'php@'.$requestedVersion;
             $output->writeln(sprintf('Assuming Homebrew package: %s', $packageName));
             // For Homebrew, the 'fullVersion' isn't strictly separate, the formula name IS the identifier.
