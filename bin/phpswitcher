@@ -1,23 +1,192 @@
-#!/usr/bin/env php
-<?php
+#!/usr/bin/env bash
 
-// Check for vendor/autoload.php and provide a helpful error message if missing
-$autoloader = __DIR__ . '/../vendor/autoload.php';
-if ( !file_exists( $autoloader ) ) {
-    fwrite( STDERR, "Error: Composer dependencies not installed. Please run install script or ensure vendor/autoload.php exists.\n" );
-    exit( 1 );
+set -e
+
+# Helper functions for printing messages
+echo_message() {
+  printf "\n\033[0;32m%s\033[0m\n" "$1"
 }
-require $autoloader;
 
-use Rawdreeg\PhpSwitcher\Command\InstallCommand;
-use Rawdreeg\PhpSwitcher\Command\UseCommand;
-use Symfony\Component\Console\Application;
+echo_error() {
+  printf "\n\033[0;31m%s\033[0m\n" "$1" >&2
+}
 
-$application = new Application( 'PHP Switcher', '0.1.1' ); // TODO: Get version dynamically
+# --- Command Implementations ---
 
-// Register commands
-$application->add( new InstallCommand() );
-$application->add( new UseCommand() );
-// TODO: Add ListCommand
+command_use() {
+    local requested_version="$1"
 
-$application->run();
+    # --- OS Check ---
+    if [[ "$OSTYPE" != "darwin"* ]]; then
+        echo_error "The 'use' command currently only supports macOS with Homebrew."
+        exit 1
+    fi
+
+    # --- Version Auto-Detection ---
+    if [ -z "$requested_version" ]; then
+        echo_message "Version argument missing, attempting detection from composer.json..."
+        local composer_json_path="./composer.json"
+        if [ -f "$composer_json_path" ]; then
+            echo "Found $composer_json_path"
+            # Try to extract from require.php or config.platform.php
+            local constraint=$(grep -o '"php": *"[^"]*"' "$composer_json_path" | head -n 1)
+            if [ -n "$constraint" ]; then
+                echo "Found PHP constraint: $constraint"
+                # Extract X.Y from the constraint
+                if [[ "$constraint" =~ ([0-9]+\.[0-9]+) ]]; then
+                    requested_version="${BASH_REMATCH[1]}"
+                    echo_message "Detected target version $requested_version from composer.json."
+                else
+                    echo "Could not extract an X.Y version from constraint. Please specify version manually."
+                fi
+            else
+                echo "No PHP version constraint found in composer.json."
+            fi
+        else
+            echo "No composer.json found in current directory."
+        fi
+    fi
+
+    if [ -z "$requested_version" ]; then
+        echo_error "PHP version not specified and could not be detected automatically."
+        echo "Usage: phpswitcher use [<version>]"
+        exit 1
+    fi
+
+    # --- Version Validation ---
+    if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo_error "Invalid version format: \"$requested_version\". Please use format X.Y (e.g., 7.4, 8.1)."
+        exit 1
+    fi
+
+    local target_package="php@$requested_version"
+    echo_message "Attempting to switch to $target_package..."
+
+    # 1. Check if target version is installed
+    if ! brew list "$target_package" >/dev/null 2>&1; then
+        echo_error "Target version $target_package does not appear to be installed via Homebrew."
+        echo "Please run \`phpswitcher install $requested_version\` first."
+        exit 1
+    fi
+    echo "$target_package is installed."
+
+    # 2. Get all installed PHP versions
+    local installed_php_versions
+    installed_php_versions=$(brew list --formula | grep '^php@')
+
+    # 3. Unlink all other PHP versions
+    echo_message "Unlinking other PHP versions..."
+    for php_version in $installed_php_versions; do
+        if [ "$php_version" != "$target_package" ]; then
+            echo " - Unlinking $php_version"
+            brew unlink "$php_version" || echo "   - Could not unlink $php_version (maybe already unlinked)."
+        fi
+    done
+
+    # 4. Link the target PHP version
+    echo_message "Linking $target_package..."
+    if brew link --force --overwrite "$target_package"; then
+        echo_message "Successfully switched to $target_package!"
+        echo "Changes should take effect immediately. If you experience issues, try restarting your terminal session."
+    else
+        echo_error "Failed to link $target_package."
+        exit 1
+    fi
+}
+
+command_install() {
+    local requested_version="$1"
+
+    # --- OS Check ---
+    if [[ "$OSTYPE" != "darwin"* ]]; then
+        echo_error "The 'install' command currently only supports macOS with Homebrew."
+        exit 1
+    fi
+
+    # --- Version Auto-Detection (similar to 'use' command) ---
+    if [ -z "$requested_version" ]; then
+        echo_message "Version argument missing, attempting detection from composer.json..."
+        local composer_json_path="./composer.json"
+        if [ -f "$composer_json_path" ]; then
+            echo "Found $composer_json_path"
+            local constraint=$(grep -o '"php": *"[^"]*"' "$composer_json_path" | head -n 1)
+            if [ -n "$constraint" ]; then
+                echo "Found PHP constraint: $constraint"
+                if [[ "$constraint" =~ ([0-9]+\.[0-9]+) ]]; then
+                    requested_version="${BASH_REMATCH[1]}"
+                    echo_message "Detected target version $requested_version from composer.json."
+                else
+                    echo "Could not extract an X.Y version from constraint. Please specify version manually."
+                fi
+            else
+                echo "No PHP version constraint found in composer.json."
+            fi
+        else
+            echo "No composer.json found in current directory."
+        fi
+    fi
+
+    if [ -z "$requested_version" ]; then
+        echo_error "PHP version not specified and could not be detected automatically."
+        echo "Usage: phpswitcher install [<version>]"
+        exit 1
+    fi
+
+    # --- Version Validation ---
+    if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo_error "Invalid version format: \"$requested_version\". Please use format X.Y (e.g., 7.4, 8.1)."
+        exit 1
+    fi
+
+    local target_package="php@$requested_version"
+    echo_message "Attempting to install $target_package..."
+
+    # 1. Check if already installed
+    if brew list "$target_package" >/dev/null 2>&1; then
+        echo "Package $target_package is already installed."
+    else
+        # 2. Install the package
+        echo_message "Installing $target_package via Homebrew..."
+        if ! brew install "$target_package"; then
+            echo_error "Failed to install $target_package via Homebrew."
+            exit 1
+        fi
+        echo_message "$target_package installed successfully!"
+    fi
+
+    # 3. Ask to switch
+    read -p "Would you like to switch to PHP $requested_version now? (y/N) " -n 1 -r REPLY
+    echo # Move to a new line
+    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+        command_use "$requested_version"
+    fi
+}
+
+command_help() {
+    echo "help command"
+}
+
+# --- Main Dispatcher ---
+main() {
+    local command="$1"
+    shift || true # Shift off the command, ignore error if no args
+
+    case "$command" in
+        use)
+            command_use "$@"
+            ;;
+        install)
+            command_install "$@"
+            ;;
+        -h|--help|help)
+            command_help
+            ;;
+        *)
+            echo_error "Unknown command: $command"
+            command_help
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
