@@ -11,16 +11,23 @@ echo_error() {
   printf "\n\033[0;31m%s\033[0m\n" "$1" >&2
 }
 
+# --- OS Detection ---
+detect_os() {
+    OS=""
+    case "$OSTYPE" in
+      darwin*)  OS="macos" ;;
+      linux-gnu*) OS="linux" ;;
+      *)
+        echo_error "Unsupported operating system: $OSTYPE"
+        exit 1
+        ;;
+    esac
+}
+
 # --- Command Implementations ---
 
-command_use() {
+command_use_macos() {
     local requested_version="$1"
-
-    # --- OS Check ---
-    if [[ "$OSTYPE" != "darwin"* ]]; then
-        echo_error "The 'use' command currently only supports macOS with Homebrew."
-        exit 1
-    fi
 
     # --- Version Auto-Detection ---
     if [ -z "$requested_version" ]; then
@@ -94,14 +101,8 @@ command_use() {
     fi
 }
 
-command_install() {
+command_install_macos() {
     local requested_version="$1"
-
-    # --- OS Check ---
-    if [[ "$OSTYPE" != "darwin"* ]]; then
-        echo_error "The 'install' command currently only supports macOS with Homebrew."
-        exit 1
-    fi
 
     # --- Version Auto-Detection (similar to 'use' command) ---
     if [ -z "$requested_version" ]; then
@@ -162,12 +163,192 @@ command_install() {
     fi
 }
 
+command_use_linux() {
+    local requested_version="$1"
+
+    # --- Version Auto-Detection ---
+    if [ -z "$requested_version" ]; then
+        echo_message "Version argument missing, attempting detection from composer.json..."
+        local composer_json_path="./composer.json"
+        if [ -f "$composer_json_path" ]; then
+            echo "Found $composer_json_path"
+            # Try to extract from require.php or config.platform.php
+            local constraint=$(grep -o '"php": *"[^"]*"' "$composer_json_path" | head -n 1)
+            if [ -n "$constraint" ]; then
+                echo "Found PHP constraint: $constraint"
+                # Extract X.Y from the constraint
+                if [[ "$constraint" =~ ([0-9]+\.[0-9]+) ]]; then
+                    requested_version="${BASH_REMATCH[1]}"
+                    echo_message "Detected target version $requested_version from composer.json."
+                else
+                    echo "Could not extract an X.Y version from constraint. Please specify version manually."
+                fi
+            else
+                echo "No PHP version constraint found in composer.json."
+            fi
+        else
+            echo "No composer.json found in current directory."
+        fi
+    fi
+
+    if [ -z "$requested_version" ]; then
+        echo_error "PHP version not specified and could not be detected automatically."
+        echo "Usage: phpswitcher use [<version>]"
+        exit 1
+    fi
+
+    # --- Version Validation ---
+    if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo_error "Invalid version format: \"$requested_version\". Please use format X.Y (e.g., 7.4, 8.1)."
+        exit 1
+    fi
+
+    local target_php_binary="/usr/bin/php$requested_version"
+    echo_message "Attempting to switch to $target_php_binary..."
+
+    # 1. Check if target version is installed
+    if ! [ -f "$target_php_binary" ]; then
+        echo_error "Target PHP version $requested_version does not appear to be installed at $target_php_binary."
+        echo "Please run \`phpswitcher install $requested_version\` first."
+        exit 1
+    fi
+    echo "PHP $requested_version is installed."
+
+    # 2. Switch the active PHP version using update-alternatives
+    echo_message "Switching active PHP version..."
+    if sudo update-alternatives --set php "$target_php_binary"; then
+        echo_message "Successfully switched to PHP $requested_version!"
+        echo "Run 'php --version' to verify."
+    else
+        echo_error "Failed to switch to PHP $requested_version using update-alternatives."
+        echo "You may need to configure it manually:"
+        echo "  sudo update-alternatives --config php"
+        exit 1
+    fi
+}
+
+command_install_linux() {
+    local requested_version="$1"
+
+    # --- Version Auto-Detection (similar to 'use' command) ---
+    if [ -z "$requested_version" ]; then
+        echo_message "Version argument missing, attempting detection from composer.json..."
+        local composer_json_path="./composer.json"
+        if [ -f "$composer_json_path" ]; then
+            echo "Found $composer_json_path"
+            local constraint=$(grep -o '"php": *"[^"]*"' "$composer_json_path" | head -n 1)
+            if [ -n "$constraint" ]; then
+                echo "Found PHP constraint: $constraint"
+                if [[ "$constraint" =~ ([0-9]+\.[0-9]+) ]]; then
+                    requested_version="${BASH_REMATCH[1]}"
+                    echo_message "Detected target version $requested_version from composer.json."
+                else
+                    echo "Could not extract an X.Y version from constraint. Please specify version manually."
+                fi
+            else
+                echo "No PHP version constraint found in composer.json."
+            fi
+        else
+            echo "No composer.json found in current directory."
+        fi
+    fi
+
+    if [ -z "$requested_version" ]; then
+        echo_error "PHP version not specified and could not be detected automatically."
+        echo "Usage: phpswitcher install [<version>]"
+        exit 1
+    fi
+
+    # --- Version Validation ---
+    if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo_error "Invalid version format: \"$requested_version\". Please use format X.Y (e.g., 7.4, 8.1)."
+        exit 1
+    fi
+
+    local target_package="php$requested_version"
+    echo_message "Attempting to install $target_package..."
+
+    # 1. Check if add-apt-repository is installed
+    if ! command -v add-apt-repository >/dev/null 2>&1; then
+        echo_error "The command 'add-apt-repository' is required but not found."
+        echo "Please install it, usually via the 'software-properties-common' package:"
+        echo "  sudo apt-get update"
+        echo "  sudo apt-get install software-properties-common"
+        exit 1
+    fi
+
+    # 2. Add the PPA
+    echo_message "Adding ppa:ondrej/php..."
+    sudo add-apt-repository -y ppa:ondrej/php
+
+    # 3. Update package list
+    echo_message "Updating package list..."
+    sudo apt-get update
+
+    # 4. Install the package
+    echo_message "Installing $target_package..."
+    if ! sudo apt-get install -y "$target_package"; then
+        echo_error "Failed to install $target_package via apt-get."
+        exit 1
+    fi
+    echo_message "$target_package installed successfully!"
+
+    # 5. Ask to switch
+    read -p "Would you like to switch to PHP $requested_version now? (y/N) " -n 1 -r REPLY
+    echo # Move to a new line
+    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+        command_use "$requested_version"
+    fi
+}
+
+command_use() {
+    if [ "$OS" = "macos" ]; then
+        command_use_macos "$@"
+    elif [ "$OS" = "linux" ]; then
+        command_use_linux "$@"
+    else
+        echo_error "The 'use' command is not supported on this OS."
+        exit 1
+    fi
+}
+
+command_install() {
+    if [ "$OS" = "macos" ]; then
+        command_install_macos "$@"
+    elif [ "$OS" = "linux" ]; then
+        command_install_linux "$@"
+    else
+        echo_error "The 'install' command is not supported on this OS."
+        exit 1
+    fi
+}
+
 command_help() {
-    echo "help command"
+    echo "phpswitcher - A simple CLI to manage multiple PHP versions."
+    echo ""
+    echo "Usage: phpswitcher <command> [<args>]"
+    echo ""
+    echo "Available commands:"
+    echo "  install [<version>]  Install a specific PHP version (e.g., 8.1)."
+    echo "                       If <version> is omitted, it attempts to detect from composer.json."
+    echo "  use [<version>]      Switch the active PHP version."
+    echo "                       If <version> is omitted, it attempts to detect from composer.json."
+    echo "  help                 Show this help message."
+    echo ""
+    echo "Platform Support:"
+    echo "  - macOS: Uses Homebrew to install and switch PHP versions (php@x.y)."
+    echo "  - Linux (Debian/Ubuntu): Uses APT with ppa:ondrej/php. Requires 'sudo' for installation and switching."
+    echo ""
+    echo "Examples:"
+    echo "  phpswitcher install 8.1"
+    echo "  phpswitcher use 7.4"
+    echo "  cd my-project/ && phpswitcher use"
 }
 
 # --- Main Dispatcher ---
 main() {
+    detect_os # Detect the OS first
+
     local command="$1"
     shift || true # Shift off the command, ignore error if no args
 
