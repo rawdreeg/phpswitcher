@@ -63,6 +63,19 @@ cd my-project-using-php7.4/
 phpswitcher use
 ```
 
+**Show Version:**
+
+```bash
+phpswitcher version
+```
+
+**Self-Update:**
+
+```bash
+phpswitcher self-update
+```
+This will fetch and install the latest version of `phpswitcher` from GitHub.
+
 **Check active PHP version (after switching):**
 
 ```bash
