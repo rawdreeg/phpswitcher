@@ -30,6 +30,7 @@ echo "Staging directory created."
 echo_message "[2/3] Copying application files..."
 cp "bin/phpswitcher" "$STAGING_DIR/bin/"
 cp "README.md" "$STAGING_DIR/"
+echo "$VERSION" > "$STAGING_DIR/VERSION"
 chmod +x "$STAGING_DIR/bin/phpswitcher"
 echo "Files copied."
 

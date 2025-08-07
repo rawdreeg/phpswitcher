@@ -2,6 +2,9 @@
 
 set -e
 
+# Define installation directory, falling back to a default.
+export PHPSWITCHER_DIR="${PHPSWITCHER_DIR:-$HOME/.phpswitcher}"
+
 # Helper functions for printing messages
 echo_message() {
   printf "\n\033[0;32m%s\033[0m\n" "$1"
@@ -9,6 +12,34 @@ echo_message() {
 
 echo_error() {
   printf "\n\033[0;31m%s\033[0m\n" "$1" >&2
+}
+
+# --- Update Checking ---
+check_for_updates() {
+    # Do not check for updates if the command is 'self-update' or 'version'
+    if [[ "$1" == "self-update" || "$1" == "version" ]]; then
+        return
+    fi
+
+    local version_file="$PHPSWITCHER_DIR/VERSION"
+    if [ ! -f "$version_file" ]; then
+        return # Cannot check for versions if the version file doesn't exist.
+    fi
+
+    local current_version
+    current_version=$(cat "$version_file")
+    local latest_version
+    latest_version=$(curl -s https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/v//')
+
+    if [ -z "$latest_version" ]; then
+        return # Could not fetch latest version
+    fi
+
+    # Simple version comparison
+    if [ "$current_version" != "$latest_version" ]; then
+        echo_message "A new version ($latest_version) of phpswitcher is available!"
+        echo "You are on version $current_version. Run 'phpswitcher self-update' to get the latest version."
+    fi
 }
 
 # --- OS Detection ---
@@ -25,6 +56,53 @@ detect_os() {
 }
 
 # --- Command Implementations ---
+
+command_version() {
+    local version_file="$PHPSWITCHER_DIR/VERSION"
+    if [ -f "$version_file" ]; then
+        echo "phpswitcher version $(cat "$version_file")"
+    else
+        echo_error "Version information not found. Your installation may be corrupted."
+        exit 1
+    fi
+}
+
+command_self_update() {
+    echo_message "Checking for the latest version..."
+
+    # 1. Fetch the latest release artifact URL
+    local artifact_url
+    artifact_url=$(curl -s https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'browser_download_url.*phpswitcher\.tar\.gz' | cut -d '"' -f 4)
+
+    if [ -z "$artifact_url" ]; then
+        echo_error "Could not find the latest release artifact URL. The update failed."
+        exit 1
+    fi
+
+    local artifact_name="phpswitcher.tar.gz"
+    local tmp_file="/tmp/$artifact_name"
+
+    # 2. Download the artifact
+    echo_message "Downloading the latest version..."
+    if ! curl -L --fail --progress-bar -o "$tmp_file" "$artifact_url"; then
+        echo_error "Failed to download the latest version. Please try again later."
+        rm -f "$tmp_file" # Clean up partial download
+        exit 1
+    fi
+
+    # 3. Extract the artifact
+    echo_message "Installing the latest version..."
+    if tar -xzf "$tmp_file" -C "$PHPSWITCHER_DIR" --strip-components=1; then
+        rm -f "$tmp_file" # Clean up downloaded tarball
+        echo_message "phpswitcher has been updated successfully!"
+        # Display the new version
+        command_version
+    else
+        echo_error "Failed to extract the new version. The update failed."
+        rm -f "$tmp_file"
+        exit 1
+    fi
+}
 
 command_use_macos() {
     local requested_version="$1"
@@ -333,6 +411,8 @@ command_help() {
     echo "                       If <version> is omitted, it attempts to detect from composer.json."
     echo "  use [<version>]      Switch the active PHP version."
     echo "                       If <version> is omitted, it attempts to detect from composer.json."
+    echo "  self-update          Update phpswitcher to the latest version."
+    echo "  version              Show the currently installed version of phpswitcher."
     echo "  help                 Show this help message."
     echo ""
     echo "Platform Support:"
@@ -343,11 +423,16 @@ command_help() {
     echo "  phpswitcher install 8.1"
     echo "  phpswitcher use 7.4"
     echo "  cd my-project/ && phpswitcher use"
+    echo "  phpswitcher self-update"
+    echo "  phpswitcher version"
 }
 
 # --- Main Dispatcher ---
 main() {
     detect_os # Detect the OS first
+
+    # Run update check in the background. Pass the first argument to it.
+    check_for_updates "$1" &
 
     local command="$1"
     shift || true # Shift off the command, ignore error if no args
@@ -358,6 +443,12 @@ main() {
             ;;
         install)
             command_install "$@"
+            ;;
+        self-update)
+            command_self_update "$@"
+            ;;
+        -v|--version|version)
+            command_version
             ;;
         -h|--help|help)
             command_help
