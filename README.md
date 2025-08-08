@@ -1,17 +1,18 @@
 # PHP Switcher
 
-A simple CLI tool to manage multiple PHP versions on macOS using Homebrew.
-(Currently only supports macOS with Homebrew. Linux/Windows support is planned).
+A simple CLI tool to manage multiple PHP versions on macOS and Linux.
 
 ## Features
 
-*   Install specific PHP versions (via Homebrew).
-*   Switch the active linked PHP version (via Homebrew).
+*   Install specific PHP versions (via Homebrew for macOS, or APT for Linux).
+*   Switch the active PHP version.
+*   List all installed PHP versions.
+*   Auto-detect required version from `composer.json`.
 
 ## Prerequisites
 
-*   **macOS:** The current version only supports macOS.
-*   **Homebrew:** Required for installing and managing PHP versions. Ensure it's installed: [https://brew.sh/](https://brew.sh/)
+*   **macOS:** Requires **Homebrew** for installing and managing PHP versions.
+*   **Linux (Debian/Ubuntu):** Requires `apt` and the `software-properties-common` package. `sudo` is required for installing and switching versions.
 
 ## Installation
 
@@ -32,7 +33,18 @@ phpswitcher help
 
 ## Usage
 
-*(Currently supports macOS/Homebrew only)*
+**List installed PHP versions:**
+
+Shows all available PHP versions and highlights the one that is currently active.
+
+```bash
+phpswitcher list
+# Example Output:
+#
+# Installed PHP Versions (via Homebrew):
+#    7.4
+#  * 8.1 (active)
+```
 
 **Install a PHP version:**
 
