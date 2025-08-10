@@ -47,21 +47,12 @@ jobs:
       - name: Run installer
         run: ./install.sh
 
-      - name: Run tests
-        # We need to use bash and source the profile file to get phpswitcher in the PATH
+      - name: Add phpswitcher to PATH and Run tests
         shell: bash
         run: |
-          # Source the correct profile file based on the OS
-          if [ "$RUNNER_OS" == "Linux" ]; then
-            # On GitHub's Ubuntu runner, the default shell is bash.
-            PROFILE_FILE="$HOME/.bashrc"
-          elif [ "$RUNNER_OS" == "macOS" ]; then
-            # On GitHub's macOS runner, the default shell is zsh.
-            PROFILE_FILE="$HOME/.zshrc"
-          fi
+          # Add the phpswitcher bin directory to the GitHub Actions path.
+          # This makes the `phpswitcher` command available to all subsequent steps.
+          echo "$HOME/.phpswitcher/bin" >> $GITHUB_PATH
 
-          echo "Sourcing profile file: $PROFILE_FILE"
-          source "$PROFILE_FILE"
-
-          # Now, run the test script
+          # Now that phpswitcher is in the PATH, run the test script.
           ./tests/run-tests.sh
