@@ -3,7 +3,7 @@
 set -e # Exit on errors
 
 # --- Configuration ---
-VERSION="0.2.1" # New version for the bash rewrite
+VERSION="0.3.0" # New version for the bash rewrite
 ARCHIVE_NAME="phpswitcher.tar.gz"
 BUILD_DIR="_build"
 STAGING_DIR="$BUILD_DIR/phpswitcher-$VERSION"
