@@ -57,6 +57,84 @@ detect_os() {
 
 # --- Command Implementations ---
 
+command_list_macos() {
+    echo_message "Installed PHP Versions (via Homebrew):"
+
+    local installed_php_versions
+    installed_php_versions=$(brew list --formula | grep '^php@' || true)
+
+    if [ -z "$installed_php_versions" ]; then
+        echo "No PHP versions found."
+        return
+    fi
+
+    # Determine active version by checking the symlink for 'php'
+    local active_version=""
+    local php_link
+    # Follow the symlink to find out which version is active
+    php_link=$(readlink "$(brew --prefix)/bin/php" 2>/dev/null || echo "")
+    if [[ "$php_link" =~ php@([0-9]+\.[0-9]+) ]]; then
+        active_version="${BASH_REMATCH[1]}"
+    fi
+
+    for formula in $installed_php_versions; do
+        local version=${formula#php@}
+        if [ "$version" == "$active_version" ]; then
+            echo " * $version (active)"
+        else
+            echo "   $version"
+        fi
+    done
+}
+
+command_list_linux() {
+    echo_message "Installed PHP Versions (via update-alternatives):"
+
+    if ! command -v update-alternatives >/dev/null; then
+        echo_error "The 'update-alternatives' command is not available on this system."
+        return
+    fi
+
+    local alternatives
+    alternatives=$(update-alternatives --list php 2>/dev/null || echo "")
+
+    if [ -z "$alternatives" ]; then
+        echo "No PHP versions found configured with update-alternatives."
+        return
+    fi
+
+    # Get the canonical path of the active binary (e.g., /usr/bin/php8.1)
+    local active_php_path
+    active_php_path=$(readlink -f /etc/alternatives/php 2>/dev/null || echo "")
+
+    (
+        # Use a subshell to read each line to avoid issues in loops
+        echo "$alternatives" | while IFS= read -r line; do
+            local version
+            # Extract X.Y version from a path like /usr/bin/phpX.Y
+            if [[ "$line" =~ php([0-9]+\.[0-9]+)$ ]]; then
+                version="${BASH_REMATCH[1]}"
+                if [ "$line" == "$active_php_path" ]; then
+                    echo " * $version (active)"
+                else
+                    echo "   $version"
+                fi
+            fi
+        done
+    )
+}
+
+command_list() {
+    if [ "$OS" = "macos" ]; then
+        command_list_macos
+    elif [ "$OS" = "linux" ]; then
+        command_list_linux
+    else
+        echo_error "The 'list' command is not supported on this OS."
+        exit 1
+    fi
+}
+
 command_version() {
     local version_file="$PHPSWITCHER_DIR/VERSION"
     if [ -f "$version_file" ]; then
@@ -411,6 +489,7 @@ command_help() {
     echo "                       If <version> is omitted, it attempts to detect from composer.json."
     echo "  use [<version>]      Switch the active PHP version."
     echo "                       If <version> is omitted, it attempts to detect from composer.json."
+    echo "  list                 List all installed PHP versions and show the active one."
     echo "  self-update          Update phpswitcher to the latest version."
     echo "  version              Show the currently installed version of phpswitcher."
     echo "  help                 Show this help message."
@@ -443,6 +522,9 @@ main() {
             ;;
         install)
             command_install "$@"
+            ;;
+        list)
+            command_list
             ;;
         self-update)
             command_self_update "$@"
