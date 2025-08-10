@@ -18,10 +18,6 @@ echo_error() {
   printf "\n\033[0;31m%s\033[0m\n" "$1" >&2
 }
 
-command_exists() {
-  command -v "$1" >/dev/null 2>&1
-}
-
 # --- Installation ---
 echo_message "Installing phpswitcher from local repository..."
 
@@ -55,29 +51,32 @@ fi
 if [ -z "$PROFILE_FILE" ]; then
   echo_error "Could not detect profile file (.bashrc, .bash_profile, or .zshrc)."
   echo "Please add the following lines manually to your shell profile file:"
-  printf "\n  export PHPSWITCHER_DIR=\"$HOME/.phpswitcher\""
-  printf "\n  export PATH=\"$INSTALL_DIR/bin:\$PATH\"\n\n"
+  printf "\n  export PHPSWITCHER_DIR=\"%s\"" "$HOME/.phpswitcher"
+  printf "\n  export PATH=\"%s/bin:\$PATH\"\n\n" "$INSTALL_DIR"
   exit 1
 fi
 
 echo "Detected profile file: $PROFILE_FILE"
 
-# Check if already configured
+# Add configuration to profile if it's not already there.
 if ! grep -q "PHPSWITCHER_DIR=" "$PROFILE_FILE"; then
   echo "Adding phpswitcher configuration to $PROFILE_FILE..."
-  printf "\n# PHP Switcher Configuration\n" >> "$PROFILE_FILE"
-  printf "export PHPSWITCHER_DIR=\"%s\"\n" "$INSTALL_DIR" >> "$PROFILE_FILE"
-  printf "export PATH=\"%s/bin:\$PATH\"\n" "$INSTALL_DIR" >> "$PROFILE_FILE"
+  {
+    printf "\n# PHP Switcher Configuration\n"
+    printf "export PHPSWITCHER_DIR=\"%s\"\n" "$INSTALL_DIR"
+    printf "export PATH=\"%s/bin:\$PATH\"\n" "$INSTALL_DIR"
+  } >> "$PROFILE_FILE"
 else
   echo "phpswitcher PATH already configured in $PROFILE_FILE."
 fi
 
 # Add shell integration sourcing if it's not already there
-INIT_SCRIPT_SOURCE="source \"\$PHPSWITCHER_DIR/phpswitcher-init.sh\""
 if ! grep -q "phpswitcher-init.sh" "$PROFILE_FILE"; then
   echo "Adding shell integration to $PROFILE_FILE..."
-  printf "\n# PHP Switcher Shell Integration\n" >> "$PROFILE_FILE"
-  printf "%s\n" "$INIT_SCRIPT_SOURCE" >> "$PROFILE_FILE"
+  {
+    printf "\n# PHP Switcher Shell Integration\n"
+    printf "source \"%s/phpswitcher-init.sh\"\n" "$INSTALL_DIR"
+  } >> "$PROFILE_FILE"
 else
   echo "phpswitcher shell integration already configured in $PROFILE_FILE."
 fi

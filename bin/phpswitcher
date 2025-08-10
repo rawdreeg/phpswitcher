@@ -88,7 +88,7 @@ detect_version() {
 
     # 2. Fallback to composer.json
     local composer_json_path="./composer.json"
-    if [ -f "$composer_json_path" ]; {
+    if [ -f "$composer_json_path" ]; then
         local constraint
         constraint=$(grep -o '"php": *"[^"]*"' "$composer_json_path" | head -n 1)
         if [[ "$constraint" =~ ([0-9]+\.[0-9]+) ]]; then
@@ -97,7 +97,7 @@ detect_version() {
             echo "$detected_version"
             return 0
         fi
-    }
+    fi
 
     return 1 # Not detected
 }

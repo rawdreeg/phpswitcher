@@ -10,10 +10,10 @@ _phpswitcher_auto_switch() {
     local dir="$PWD"
     local version_file=""
     while [ -n "$dir" ] && [ "$dir" != "/" ]; do
-        if [ -f "$dir/.php-version" ]; {
+        if [ -f "$dir/.php-version" ]; then
             version_file="$dir/.php-version"
             break
-        } fi
+        fi
         dir=$(dirname "$dir")
     done
 
