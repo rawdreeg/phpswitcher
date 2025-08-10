@@ -7,7 +7,8 @@ A simple CLI tool to manage multiple PHP versions on macOS and Linux.
 *   Install specific PHP versions (via Homebrew for macOS, or APT for Linux).
 *   Switch the active PHP version.
 *   List all installed PHP versions.
-*   Auto-detect required version from `composer.json`.
+*   Auto-detect required version from `.php-version` or `composer.json`.
+*   **Automatic version switching** when you change directories.
 
 ## Prerequisites
 
@@ -93,6 +94,29 @@ This will fetch and install the latest version of `phpswitcher` from GitHub.
 ```bash
 php --version
 ```
+
+## Automatic Version Switching
+
+`phpswitcher` supports automatic version switching when you change directories. This is achieved by hooking into your shell's prompt.
+
+### How it Works
+
+1.  When you `cd` into a new directory, `phpswitcher` looks for a `.php-version` file in the current directory or any parent directory.
+2.  If a `.php-version` file is found, it reads the required version from it.
+3.  If the required version is not the currently active version, `phpswitcher` automatically runs `phpswitcher use` to switch to the correct version.
+
+### Usage
+
+To use this feature, simply create a file named `.php-version` in the root of your project and put the desired PHP version number in it.
+
+```bash
+# In your project's root directory
+echo "8.1" > .php-version
+```
+
+Now, whenever you `cd` into this directory (or any subdirectory), `phpswitcher` will ensure that PHP 8.1 is activated automatically.
+
+This feature is enabled by default during the installation process, which adds a sourcing line to your shell's profile file (`.bashrc` or `.zshrc`).
 
 ## Development
 
