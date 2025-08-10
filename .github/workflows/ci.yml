@@ -47,12 +47,9 @@ jobs:
       - name: Run installer
         run: ./install.sh
 
-      - name: Add phpswitcher to PATH and Run tests
-        shell: bash
-        run: |
-          # Add the phpswitcher bin directory to the GitHub Actions path.
-          # This makes the `phpswitcher` command available to all subsequent steps.
-          echo "$HOME/.phpswitcher/bin" >> $GITHUB_PATH
+      - name: Add phpswitcher to PATH
+        run: echo "$HOME/.phpswitcher/bin" >> $GITHUB_PATH
 
-          # Now that phpswitcher is in the PATH, run the test script.
-          ./tests/run-tests.sh
+      - name: Run tests
+        shell: bash
+        run: ./tests/run-tests.sh
