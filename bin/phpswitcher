@@ -305,11 +305,34 @@ command_install_macos() {
     fi
 
     local target_package="php@$requested_version"
+
+    # Check if the formula exists in the core repository. If not, try the shivammathur/php tap.
+    if ! brew info "$target_package" &>/dev/null; then
+        echo_message "Formula $target_package not found in Homebrew core."
+        echo_message "Attempting to use the shivammathur/php tap for older versions..."
+
+        # Ensure the tap is available.
+        if ! brew tap | grep -q "shivammathur/php"; then
+            echo_message "Tapping shivammathur/php..."
+            brew tap shivammathur/php
+        fi
+
+        # Update the target package to the fully qualified name from the tap.
+        target_package="shivammathur/php/php@$requested_version"
+
+        # Check if the formula exists in the tap.
+        if ! brew info "$target_package" &>/dev/null; then
+            echo_error "Formula php@$requested_version not found in shivammathur/php tap either."
+            echo_error "Please specify an available PHP version."
+            exit 1
+        fi
+    fi
+
     echo_message "Attempting to install $target_package..."
 
     # 1. Check if already installed
     if brew list "$target_package" >/dev/null 2>&1; then
-        echo "Package $target_package is already installed."
+        echo "Package $target_package is already installed." >&2
     else
         # 2. Install the package
         echo_message "Installing $target_package via Homebrew..."
