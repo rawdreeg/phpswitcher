@@ -36,10 +36,12 @@ report_failure() {
 
 # Asserts that the last command executed successfully (exit code 0)
 assert_success() {
-    if [ $? -eq 0 ]; then
-        report_success "$1"
+    local exit_code="$1"
+    local message="$2"
+    if [ "$exit_code" -eq 0 ]; then
+        report_success "$message"
     else
-        report_failure "$1"
+        report_failure "$message"
     fi
 }
 
