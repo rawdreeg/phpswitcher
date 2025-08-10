@@ -3,7 +3,7 @@
 # This script runs a series of tests against the phpswitcher tool.
 # It is intended to be run in a CI environment after install.sh has been executed.
 
-set -euo pipefail # Exit on error, unset variable, or pipe failure
+set -uo pipefail # Track unset variables and pipe failures; we handle exit codes manually
 
 # --- Test Helpers ---
 # These functions help in asserting test outcomes.
@@ -34,14 +34,14 @@ report_failure() {
     fi
 }
 
-# Asserts that the last command executed successfully (exit code 0)
+# Assert that a command succeeded: first arg = exit code, rest = message
 assert_success() {
-    local exit_code="$1"
-    local message="$2"
+    local exit_code="$1"; shift
+    local message="$*"
     if [ "$exit_code" -eq 0 ]; then
         report_success "$message"
     else
-        report_failure "$message"
+        report_failure "$message (exit $exit_code)"
     fi
 }
 
@@ -65,7 +65,7 @@ assert_contains() {
 test_install_command() {
     test_case "Install PHP 8.1"
     phpswitcher install 8.1
-    assert_success "phpswitcher install 8.1"
+    assert_success $? "phpswitcher install 8.1"
 
     test_case "Verify PHP 8.1 installation"
     if [[ "$(uname)" == "Linux" ]]; then
@@ -75,7 +75,7 @@ test_install_command() {
         # On macOS, check if the formula is installed by Homebrew
         brew list php@8.1 >/dev/null
     fi
-    assert_success "PHP 8.1 is present in the system"
+    assert_success $? "PHP 8.1 is present in the system"
 }
 
 # Test the 'list' command
@@ -90,7 +90,7 @@ test_list_command() {
 test_use_command() {
     test_case "Switch to PHP 8.1"
     phpswitcher use 8.1
-    assert_success "phpswitcher use 8.1"
+    assert_success $? "phpswitcher use 8.1"
 
     test_case "Verify active PHP version is 8.1"
     # Give the shell a moment to recognize the new version
@@ -104,7 +104,7 @@ test_use_command() {
 test_php_version_file_detection() {
     test_case "Install PHP 7.4 for .php-version test"
     phpswitcher install 7.4
-    assert_success "phpswitcher install 7.4"
+    assert_success $? "phpswitcher install 7.4"
 
     test_case "Auto-detection with 'use' command"
     mkdir -p test_project
@@ -112,8 +112,8 @@ test_php_version_file_detection() {
         cd test_project
         echo "7.4" > .php-version
         # The 'use' command without a version should detect it
-        phpswitcher use
-        assert_success "phpswitcher use (with .php-version)"
+    phpswitcher use
+    assert_success $? "phpswitcher use (with .php-version)"
 
         # Verify the switch
         local active_version
