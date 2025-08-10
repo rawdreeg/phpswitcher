@@ -1,3 +1,5 @@
+[![CI](https://github.com/rawdreeg/phpswitcher/actions/workflows/ci.yml/badge.svg)](https://github.com/rawdreeg/phpswitcher/actions/workflows/ci.yml)
+
 # PHP Switcher
 
 A simple CLI tool to manage multiple PHP versions on macOS and Linux.
