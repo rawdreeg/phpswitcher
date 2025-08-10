@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    name: Lint Shell Scripts
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install shellcheck
+        run: |
+          if [ "${{ runner.os }}" == "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y shellcheck
+          elif [ "${{ runner.os }}" == "macOS" ]; then
+            brew install shellcheck
+          fi
+
+      - name: Run shellcheck
+        run: shellcheck bin/phpswitcher bin/phpswitcher-init.sh install.sh
+
+  test:
+    name: Run Tests
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Make scripts executable
+        run: |
+          chmod +x install.sh
+          chmod +x tests/run-tests.sh
+
+      - name: Run installer
+        run: ./install.sh
+
+      - name: Run tests
+        # We need to use bash and source the profile file to get phpswitcher in the PATH
+        shell: bash
+        run: |
+          # Source the correct profile file based on the OS
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            # On GitHub's Ubuntu runner, the default shell is bash.
+            PROFILE_FILE="$HOME/.bashrc"
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            # On GitHub's macOS runner, the default shell is zsh.
+            PROFILE_FILE="$HOME/.zshrc"
+          fi
+
+          echo "Sourcing profile file: $PROFILE_FILE"
+          source "$PROFILE_FILE"
+
+          # Now, run the test script
+          ./tests/run-tests.sh
