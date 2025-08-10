@@ -9,7 +9,7 @@ export PHPSWITCHER_DIR="${PHPSWITCHER_DIR:-$HOME/.phpswitcher}"
 echo_message() {
     # Only print if PHPSWITCHER_QUIET is not set to "true"
     if [ "$PHPSWITCHER_QUIET" != "true" ]; then
-        printf "\n\033[0;32m%s\033[0m\n" "$1"
+        printf "\n\033[0;32m%s\033[0m\n" "$1" >&2
     fi
 }
 

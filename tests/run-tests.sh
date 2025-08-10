@@ -100,15 +100,15 @@ test_use_command() {
 
 # Test the .php-version file detection
 test_php_version_file_detection() {
-    test_case "Install PHP 8.0 for .php-version test"
-    phpswitcher install 8.0
-    assert_success "phpswitcher install 8.0"
+    test_case "Install PHP 7.4 for .php-version test"
+    phpswitcher install 7.4
+    assert_success "phpswitcher install 7.4"
 
     test_case "Auto-detection with 'use' command"
     mkdir -p test_project
     (
         cd test_project
-        echo "8.0" > .php-version
+        echo "7.4" > .php-version
         # The 'use' command without a version should detect it
         phpswitcher use
         assert_success "phpswitcher use (with .php-version)"
@@ -116,7 +116,7 @@ test_php_version_file_detection() {
         # Verify the switch
         local active_version
         active_version=$(php --version | head -n 1 | grep -o -E '[0-9]+\.[0-9]+' | head -n 1)
-        assert_contains "$active_version" "8.0" "Active version is 8.0 after detection"
+        assert_contains "$active_version" "7.4" "Active version is 7.4 after detection"
     )
     rm -rf test_project
 }
