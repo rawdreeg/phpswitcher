@@ -320,11 +320,16 @@ command_install_macos() {
         echo_message "$target_package installed successfully!"
     fi
 
-    # 3. Ask to switch
-    read -p "Would you like to switch to PHP $requested_version now? (y/N) " -n 1 -r REPLY
-    echo # Move to a new line
-    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-        command_use "$requested_version"
+    # If interactive, ask the user if they want to switch. Otherwise, switch automatically.
+    if [ -t 0 ]; then
+        read -p "Would you like to switch to PHP $requested_version now? (y/N) " -n 1 -r REPLY
+        echo # Move to a new line
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            command_use "$requested_version"
+        fi
+    else
+        echo_message "Non-interactive mode detected. Switching to PHP $requested_version automatically."
+        command_use "$requested_version" --quiet
     fi
 }
 
@@ -419,11 +424,16 @@ command_install_linux() {
     fi
     echo_message "$target_package installed successfully!"
 
-    # 5. Ask to switch
-    read -p "Would you like to switch to PHP $requested_version now? (y/N) " -n 1 -r REPLY
-    echo # Move to a new line
-    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-        command_use "$requested_version"
+    # If interactive, ask the user if they want to switch. Otherwise, switch automatically.
+    if [ -t 0 ]; then
+        read -p "Would you like to switch to PHP $requested_version now? (y/N) " -n 1 -r REPLY
+        echo # Move to a new line
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            command_use "$requested_version"
+        fi
+    else
+        echo_message "Non-interactive mode detected. Switching to PHP $requested_version automatically."
+        command_use "$requested_version" --quiet
     fi
 }
 
