@@ -112,7 +112,7 @@ test_php_version_file_detection() {
         cd test_project
         echo "7.4" > .php-version
         # The 'use' command without a version should detect it
-    phpswitcher use
+        phpswitcher use
     assert_success $? "phpswitcher use (with .php-version)"
 
         # Verify the switch
