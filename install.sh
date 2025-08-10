@@ -6,13 +6,8 @@ set -e # Exit immediately if a command exits with a non-zero status.
 export PHPSWITCHER_DIR="${PHPSWITCHER_DIR:-$HOME/.phpswitcher}"
 INSTALL_DIR="$PHPSWITCHER_DIR"
 
-# Fetch the latest release artifact URL
-ARTIFACT_URL=$(curl -s https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'browser_download_url.*phpswitcher\.tar\.gz' | cut -d '"' -f 4)
-if [ -z "$ARTIFACT_URL" ]; then
-    echo_error "Could not find the latest release artifact URL. Please check the repository."
-    exit 1
-fi
-ARTIFACT_NAME="phpswitcher.tar.gz"
+# This is a local installer for development.
+# It will install phpswitcher from the current repository clone.
 
 # Helper function for printing messages
 echo_message() {
@@ -27,46 +22,19 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
-# --- Dependency Checks ---
-echo_message "Checking dependencies..."
+# --- Installation ---
+echo_message "Installing phpswitcher from local repository..."
 
-if ! command_exists tar; then
-  echo_error "Error: tar is not installed. Please install tar and try again."
-  exit 1
-fi
+mkdir -p "$INSTALL_DIR/bin"
 
-if ! command_exists curl; then
-  echo_error "Error: curl is required but not installed. Please install it and try again."
-  exit 1
-fi
+# Copy the main script and the init script
+cp "bin/phpswitcher" "$INSTALL_DIR/bin/"
+cp "bin/phpswitcher-init.sh" "$INSTALL_DIR/" # Place init script in the root
 
-echo "Dependencies found."
+# Ensure the main script is executable
+chmod +x "$INSTALL_DIR/bin/phpswitcher"
 
-# --- Download and Extract Build Artifact ---
-echo_message "Downloading phpswitcher artifact..."
-
-mkdir -p "$INSTALL_DIR"
-TMP_FILE="/tmp/$ARTIFACT_NAME"
-
-echo "Downloading from: $ARTIFACT_URL"
-if curl -L --fail --progress-bar -o "$TMP_FILE" "$ARTIFACT_URL"; then
-    echo "Download successful."
-else
-    echo_error "Failed to download artifact from $ARTIFACT_URL"
-    rm -f "$TMP_FILE" # Clean up partial download
-    exit 1
-fi
-
-echo_message "Extracting phpswitcher..."
-# Use --strip-components=1 as the archive contains a top-level directory like phpswitcher-X.Y.Z/
-if tar -xzf "$TMP_FILE" -C "$INSTALL_DIR" --strip-components=1; then
-    echo "Extraction successful."
-    rm -f "$TMP_FILE" # Clean up downloaded tarball
-else
-    echo_error "Failed to extract artifact $TMP_FILE"
-    rm -f "$TMP_FILE"
-    exit 1
-fi
+echo "Installation of scripts successful."
 
 # --- Setup Environment / Profile ---
 echo_message "Setting up environment..."
@@ -101,7 +69,17 @@ if ! grep -q "PHPSWITCHER_DIR=" "$PROFILE_FILE"; then
   printf "export PHPSWITCHER_DIR=\"%s\"\n" "$INSTALL_DIR" >> "$PROFILE_FILE"
   printf "export PATH=\"%s/bin:\$PATH\"\n" "$INSTALL_DIR" >> "$PROFILE_FILE"
 else
-  echo "phpswitcher already configured in $PROFILE_FILE."
+  echo "phpswitcher PATH already configured in $PROFILE_FILE."
+fi
+
+# Add shell integration sourcing if it's not already there
+INIT_SCRIPT_SOURCE="source \"\$PHPSWITCHER_DIR/phpswitcher-init.sh\""
+if ! grep -q "phpswitcher-init.sh" "$PROFILE_FILE"; then
+  echo "Adding shell integration to $PROFILE_FILE..."
+  printf "\n# PHP Switcher Shell Integration\n" >> "$PROFILE_FILE"
+  printf "%s\n" "$INIT_SCRIPT_SOURCE" >> "$PROFILE_FILE"
+else
+  echo "phpswitcher shell integration already configured in $PROFILE_FILE."
 fi
 
 # --- Final Message ---
