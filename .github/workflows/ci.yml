@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  lint:
+    name: Lint Shell Scripts
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install shellcheck
+        run: |
+          if [ "${{ runner.os }}" == "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y shellcheck
+          elif [ "${{ runner.os }}" == "macOS" ]; then
+            brew install shellcheck
+          fi
+
+      - name: Run shellcheck
+        run: shellcheck bin/phpswitcher bin/phpswitcher-init.sh install.sh
+
+  test:
+    name: Run Tests
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Make scripts executable
+        run: |
+          chmod +x install.sh
+          chmod +x tests/run-tests.sh
+
+      - name: Run installer
+        run: ./install.sh
+
+      - name: Add phpswitcher to PATH
+        run: echo "$HOME/.phpswitcher/bin" >> $GITHUB_PATH
+
+      - name: Run tests
+        shell: bash
+        run: ./tests/run-tests.sh

@@ -3,7 +3,7 @@
 set -e # Exit on errors
 
 # --- Configuration ---
-VERSION="1.0.0" # New version for the bash rewrite
+VERSION="0.3.0" # New version for the bash rewrite
 ARCHIVE_NAME="phpswitcher.tar.gz"
 BUILD_DIR="_build"
 STAGING_DIR="$BUILD_DIR/phpswitcher-$VERSION"
@@ -29,8 +29,13 @@ echo "Staging directory created."
 # 2. Copy necessary files to staging directory
 echo_message "[2/3] Copying application files..."
 cp "bin/phpswitcher" "$STAGING_DIR/bin/"
+cp "bin/phpswitcher-init.sh" "$STAGING_DIR/"
+cp "install.sh" "$STAGING_DIR/"
 cp "README.md" "$STAGING_DIR/"
+cp "LICENSE" "$STAGING_DIR/"
+echo "$VERSION" > "$STAGING_DIR/VERSION"
 chmod +x "$STAGING_DIR/bin/phpswitcher"
+chmod +x "$STAGING_DIR/install.sh"
 echo "Files copied."
 
 # 3. Create the archive

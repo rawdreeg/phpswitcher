@@ -1,17 +1,21 @@
+[![CI](https://github.com/rawdreeg/phpswitcher/actions/workflows/ci.yml/badge.svg)](https://github.com/rawdreeg/phpswitcher/actions/workflows/ci.yml)
+
 # PHP Switcher
 
-A simple CLI tool to manage multiple PHP versions on macOS using Homebrew.
-(Currently only supports macOS with Homebrew. Linux/Windows support is planned).
+A simple CLI tool to manage multiple PHP versions on macOS and Linux.
 
 ## Features
 
-*   Install specific PHP versions (via Homebrew).
-*   Switch the active linked PHP version (via Homebrew).
+*   Install specific PHP versions (via Homebrew for macOS, or APT for Linux).
+*   Switch the active PHP version.
+*   List all installed PHP versions.
+*   Auto-detect required version from `.php-version` or `composer.json`.
+*   **Automatic version switching** when you change directories.
 
 ## Prerequisites
 
-*   **macOS:** The current version only supports macOS.
-*   **Homebrew:** Required for installing and managing PHP versions. Ensure it's installed: [https://brew.sh/](https://brew.sh/)
+*   **macOS:** Requires **Homebrew** for installing and managing PHP versions.
+*   **Linux (Debian/Ubuntu):** Requires `apt` and the `software-properties-common` package. `sudo` is required for installing and switching versions.
 
 ## Installation
 
@@ -32,7 +36,18 @@ phpswitcher help
 
 ## Usage
 
-*(Currently supports macOS/Homebrew only)*
+**List installed PHP versions:**
+
+Shows all available PHP versions and highlights the one that is currently active.
+
+```bash
+phpswitcher list
+# Example Output:
+#
+# Installed PHP Versions (via Homebrew):
+#    7.4
+#  * 8.1 (active)
+```
 
 **Install a PHP version:**
 
@@ -63,11 +78,47 @@ cd my-project-using-php7.4/
 phpswitcher use
 ```
 
+**Show Version:**
+
+```bash
+phpswitcher version
+```
+
+**Self-Update:**
+
+```bash
+phpswitcher self-update
+```
+This will fetch and install the latest version of `phpswitcher` from GitHub.
+
 **Check active PHP version (after switching):**
 
 ```bash
 php --version
 ```
+
+## Automatic Version Switching
+
+`phpswitcher` supports automatic version switching when you change directories. This is achieved by hooking into your shell's prompt.
+
+### How it Works
+
+1.  When you `cd` into a new directory, `phpswitcher` looks for a `.php-version` file in the current directory or any parent directory.
+2.  If a `.php-version` file is found, it reads the required version from it.
+3.  If the required version is not the currently active version, `phpswitcher` automatically runs `phpswitcher use` to switch to the correct version.
+
+### Usage
+
+To use this feature, simply create a file named `.php-version` in the root of your project and put the desired PHP version number in it.
+
+```bash
+# In your project's root directory
+echo "8.1" > .php-version
+```
+
+Now, whenever you `cd` into this directory (or any subdirectory), `phpswitcher` will ensure that PHP 8.1 is activated automatically.
+
+This feature is enabled by default during the installation process, which adds a sourcing line to your shell's profile file (`.bashrc` or `.zshrc`).
 
 ## Development
 

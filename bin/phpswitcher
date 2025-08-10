@@ -2,55 +2,245 @@
 
 set -e
 
+# Define installation directory, falling back to a default.
+export PHPSWITCHER_DIR="${PHPSWITCHER_DIR:-$HOME/.phpswitcher}"
+
 # Helper functions for printing messages
 echo_message() {
-  printf "\n\033[0;32m%s\033[0m\n" "$1"
+    # Only print if PHPSWITCHER_QUIET is not set to "true"
+    if [ "$PHPSWITCHER_QUIET" != "true" ]; then
+        printf "\n\033[0;32m%s\033[0m\n" "$1" >&2
+    fi
 }
 
 echo_error() {
-  printf "\n\033[0;31m%s\033[0m\n" "$1" >&2
+    # Always print errors to stderr
+    printf "\n\033[0;31m%s\033[0m\n" "$1" >&2
 }
 
-# --- Command Implementations ---
-
-command_use() {
-    local requested_version="$1"
-
-    # --- OS Check ---
-    if [[ "$OSTYPE" != "darwin"* ]]; then
-        echo_error "The 'use' command currently only supports macOS with Homebrew."
-        exit 1
+# --- Update Checking ---
+check_for_updates() {
+    # Do not check for updates if the command is 'self-update' or 'version'
+    if [[ "$1" == "self-update" || "$1" == "version" ]]; then
+        return
     fi
 
-    # --- Version Auto-Detection ---
-    if [ -z "$requested_version" ]; then
-        echo_message "Version argument missing, attempting detection from composer.json..."
-        local composer_json_path="./composer.json"
-        if [ -f "$composer_json_path" ]; then
-            echo "Found $composer_json_path"
-            # Try to extract from require.php or config.platform.php
-            local constraint=$(grep -o '"php": *"[^"]*"' "$composer_json_path" | head -n 1)
-            if [ -n "$constraint" ]; then
-                echo "Found PHP constraint: $constraint"
-                # Extract X.Y from the constraint
-                if [[ "$constraint" =~ ([0-9]+\.[0-9]+) ]]; then
-                    requested_version="${BASH_REMATCH[1]}"
-                    echo_message "Detected target version $requested_version from composer.json."
-                else
-                    echo "Could not extract an X.Y version from constraint. Please specify version manually."
-                fi
-            else
-                echo "No PHP version constraint found in composer.json."
-            fi
-        else
-            echo "No composer.json found in current directory."
+    local version_file="$PHPSWITCHER_DIR/VERSION"
+    if [ ! -f "$version_file" ]; then
+        return # Cannot check for versions if the version file doesn't exist.
+    fi
+
+    local current_version
+    current_version=$(cat "$version_file")
+    local latest_version
+    latest_version=$(curl -s https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/v//')
+
+    if [ -z "$latest_version" ]; then
+        return # Could not fetch latest version
+    fi
+
+    # Simple version comparison
+    if [ "$current_version" != "$latest_version" ]; then
+        echo_message "A new version ($latest_version) of phpswitcher is available!"
+        echo "You are on version $current_version. Run 'phpswitcher self-update' to get the latest version."
+    fi
+}
+
+# --- OS Detection ---
+detect_os() {
+    OS=""
+    case "$OSTYPE" in
+      darwin*)  OS="macos" ;;
+      linux-gnu*) OS="linux" ;;
+      *)
+        echo_error "Unsupported operating system: $OSTYPE"
+        exit 1
+        ;;
+    esac
+}
+
+# --- Version Detection ---
+
+# Find and read a .php-version file by traversing up from the current directory.
+find_php_version_file() {
+    local dir="$PWD"
+    while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+        if [ -f "$dir/.php-version" ]; then
+            # Read the first line of the file and trim whitespace
+            head -n 1 "$dir/.php-version" | tr -d '[:space:]'
+            return 0
+        fi
+        dir=$(dirname "$dir")
+    done
+    return 1 # Not found
+}
+
+# Detect the required PHP version, prioritizing .php-version over composer.json.
+detect_version() {
+    local detected_version
+
+    # 1. Prioritize .php-version file
+    if detected_version=$(find_php_version_file); then
+        echo_message "Detected target version $detected_version from .php-version file."
+        echo "$detected_version"
+        return 0
+    fi
+
+    # 2. Fallback to composer.json
+    local composer_json_path="./composer.json"
+    if [ -f "$composer_json_path" ]; then
+        local constraint
+        constraint=$(grep -o '"php": *"[^"]*"' "$composer_json_path" | head -n 1)
+        if [[ "$constraint" =~ ([0-9]+\.[0-9]+) ]]; then
+            detected_version="${BASH_REMATCH[1]}"
+            echo_message "Detected target version $detected_version from composer.json."
+            echo "$detected_version"
+            return 0
         fi
     fi
 
-    if [ -z "$requested_version" ]; then
-        echo_error "PHP version not specified and could not be detected automatically."
-        echo "Usage: phpswitcher use [<version>]"
+    return 1 # Not detected
+}
+
+
+# --- Command Implementations ---
+
+command_list_macos() {
+    echo_message "Installed PHP Versions (via Homebrew):"
+
+    local installed_php_versions
+    installed_php_versions=$(brew list --formula | grep '^php@' || true)
+
+    if [ -z "$installed_php_versions" ]; then
+        echo "No PHP versions found."
+        return
+    fi
+
+    # Determine active version by checking the symlink for 'php'
+    local active_version=""
+    local php_link
+    # Follow the symlink to find out which version is active
+    php_link=$(readlink "$(brew --prefix)/bin/php" 2>/dev/null || echo "")
+    if [[ "$php_link" =~ php@([0-9]+\.[0-9]+) ]]; then
+        active_version="${BASH_REMATCH[1]}"
+    fi
+
+    for formula in $installed_php_versions; do
+        local version=${formula#php@}
+        if [ "$version" == "$active_version" ]; then
+            echo " * $version (active)"
+        else
+            echo "   $version"
+        fi
+    done
+}
+
+command_list_linux() {
+    echo_message "Installed PHP Versions (via update-alternatives):"
+
+    if ! command -v update-alternatives >/dev/null; then
+        echo_error "The 'update-alternatives' command is not available on this system."
+        return
+    fi
+
+    local alternatives
+    alternatives=$(update-alternatives --list php 2>/dev/null || echo "")
+
+    if [ -z "$alternatives" ]; then
+        echo "No PHP versions found configured with update-alternatives."
+        return
+    fi
+
+    # Get the canonical path of the active binary (e.g., /usr/bin/php8.1)
+    local active_php_path
+    active_php_path=$(readlink -f /etc/alternatives/php 2>/dev/null || echo "")
+
+    (
+        # Use a subshell to read each line to avoid issues in loops
+        echo "$alternatives" | while IFS= read -r line; do
+            local version
+            # Extract X.Y version from a path like /usr/bin/phpX.Y
+            if [[ "$line" =~ php([0-9]+\.[0-9]+)$ ]]; then
+                version="${BASH_REMATCH[1]}"
+                if [ "$line" == "$active_php_path" ]; then
+                    echo " * $version (active)"
+                else
+                    echo "   $version"
+                fi
+            fi
+        done
+    )
+}
+
+command_list() {
+    if [ "$OS" = "macos" ]; then
+        command_list_macos
+    elif [ "$OS" = "linux" ]; then
+        command_list_linux
+    else
+        echo_error "The 'list' command is not supported on this OS."
         exit 1
+    fi
+}
+
+command_version() {
+    local version_file="$PHPSWITCHER_DIR/VERSION"
+    if [ -f "$version_file" ]; then
+        echo "phpswitcher version $(cat "$version_file")"
+    else
+        echo_error "Version information not found. Your installation may be corrupted."
+        exit 1
+    fi
+}
+
+command_self_update() {
+    echo_message "Checking for the latest version..."
+
+    # 1. Fetch the latest release artifact URL
+    local artifact_url
+    artifact_url=$(curl -s https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'browser_download_url.*phpswitcher\.tar\.gz' | cut -d '"' -f 4)
+
+    if [ -z "$artifact_url" ]; then
+        echo_error "Could not find the latest release artifact URL. The update failed."
+        exit 1
+    fi
+
+    local artifact_name="phpswitcher.tar.gz"
+    local tmp_file="/tmp/$artifact_name"
+
+    # 2. Download the artifact
+    echo_message "Downloading the latest version..."
+    if ! curl -L --fail --progress-bar -o "$tmp_file" "$artifact_url"; then
+        echo_error "Failed to download the latest version. Please try again later."
+        rm -f "$tmp_file" # Clean up partial download
+        exit 1
+    fi
+
+    # 3. Extract the artifact
+    echo_message "Installing the latest version..."
+    if tar -xzf "$tmp_file" -C "$PHPSWITCHER_DIR" --strip-components=1; then
+        rm -f "$tmp_file" # Clean up downloaded tarball
+        echo_message "phpswitcher has been updated successfully!"
+        # Display the new version
+        command_version
+    else
+        echo_error "Failed to extract the new version. The update failed."
+        rm -f "$tmp_file"
+        exit 1
+    fi
+}
+
+command_use_macos() {
+    local requested_version="$1"
+
+    # --- Version Auto-Detection ---
+    if [ -z "$requested_version" ]; then
+        echo_message "Version argument missing, attempting auto-detection..."
+        if ! requested_version=$(detect_version); then
+            echo_error "PHP version not specified and could not be detected automatically."
+            echo "Usage: phpswitcher use [<version>]"
+            exit 1
+        fi
     fi
 
     # --- Version Validation ---
@@ -86,6 +276,7 @@ command_use() {
     # 4. Link the target PHP version
     echo_message "Linking $target_package..."
     if brew link --force --overwrite "$target_package"; then
+        echo "$requested_version" > "$PHPSWITCHER_DIR/active_version"
         echo_message "Successfully switched to $target_package!"
         echo "Changes should take effect immediately. If you experience issues, try restarting your terminal session."
     else
@@ -94,42 +285,17 @@ command_use() {
     fi
 }
 
-command_install() {
+command_install_macos() {
     local requested_version="$1"
-
-    # --- OS Check ---
-    if [[ "$OSTYPE" != "darwin"* ]]; then
-        echo_error "The 'install' command currently only supports macOS with Homebrew."
-        exit 1
-    fi
 
     # --- Version Auto-Detection (similar to 'use' command) ---
     if [ -z "$requested_version" ]; then
-        echo_message "Version argument missing, attempting detection from composer.json..."
-        local composer_json_path="./composer.json"
-        if [ -f "$composer_json_path" ]; then
-            echo "Found $composer_json_path"
-            local constraint=$(grep -o '"php": *"[^"]*"' "$composer_json_path" | head -n 1)
-            if [ -n "$constraint" ]; then
-                echo "Found PHP constraint: $constraint"
-                if [[ "$constraint" =~ ([0-9]+\.[0-9]+) ]]; then
-                    requested_version="${BASH_REMATCH[1]}"
-                    echo_message "Detected target version $requested_version from composer.json."
-                else
-                    echo "Could not extract an X.Y version from constraint. Please specify version manually."
-                fi
-            else
-                echo "No PHP version constraint found in composer.json."
-            fi
-        else
-            echo "No composer.json found in current directory."
+        echo_message "Version argument missing, attempting auto-detection..."
+        if ! requested_version=$(detect_version); then
+            echo_error "PHP version not specified and could not be detected automatically."
+            echo "Usage: phpswitcher install [<version>]"
+            exit 1
         fi
-    fi
-
-    if [ -z "$requested_version" ]; then
-        echo_error "PHP version not specified and could not be detected automatically."
-        echo "Usage: phpswitcher install [<version>]"
-        exit 1
     fi
 
     # --- Version Validation ---
@@ -139,11 +305,34 @@ command_install() {
     fi
 
     local target_package="php@$requested_version"
+
+    # Check if the formula exists in the core repository. If not, try the shivammathur/php tap.
+    if ! brew info "$target_package" &>/dev/null; then
+        echo_message "Formula $target_package not found in Homebrew core."
+        echo_message "Attempting to use the shivammathur/php tap for older versions..."
+
+        # Ensure the tap is available.
+        if ! brew tap | grep -q "shivammathur/php"; then
+            echo_message "Tapping shivammathur/php..."
+            brew tap shivammathur/php
+        fi
+
+        # Update the target package to the fully qualified name from the tap.
+        target_package="shivammathur/php/php@$requested_version"
+
+        # Check if the formula exists in the tap.
+        if ! brew info "$target_package" &>/dev/null; then
+            echo_error "Formula php@$requested_version not found in shivammathur/php tap either."
+            echo_error "Please specify an available PHP version."
+            exit 1
+        fi
+    fi
+
     echo_message "Attempting to install $target_package..."
 
     # 1. Check if already installed
     if brew list "$target_package" >/dev/null 2>&1; then
-        echo "Package $target_package is already installed."
+        echo "Package $target_package is already installed." >&2
     else
         # 2. Install the package
         echo_message "Installing $target_package via Homebrew..."
@@ -154,20 +343,192 @@ command_install() {
         echo_message "$target_package installed successfully!"
     fi
 
-    # 3. Ask to switch
-    read -p "Would you like to switch to PHP $requested_version now? (y/N) " -n 1 -r REPLY
-    echo # Move to a new line
-    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-        command_use "$requested_version"
+    # If interactive, ask the user if they want to switch. Otherwise, switch automatically.
+    if [ -t 0 ]; then
+        read -p "Would you like to switch to PHP $requested_version now? (y/N) " -n 1 -r REPLY
+        echo # Move to a new line
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            command_use "$requested_version"
+        fi
+    else
+        echo_message "Non-interactive mode detected. Switching to PHP $requested_version automatically."
+        command_use "$requested_version" --quiet
+    fi
+}
+
+command_use_linux() {
+    local requested_version="$1"
+
+    # --- Version Auto-Detection ---
+    if [ -z "$requested_version" ]; then
+        echo_message "Version argument missing, attempting auto-detection..."
+        if ! requested_version=$(detect_version); then
+            echo_error "PHP version not specified and could not be detected automatically."
+            echo "Usage: phpswitcher use [<version>]"
+            exit 1
+        fi
+    fi
+
+    # --- Version Validation ---
+    if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo_error "Invalid version format: \"$requested_version\". Please use format X.Y (e.g., 7.4, 8.1)."
+        exit 1
+    fi
+
+    local target_php_binary="/usr/bin/php$requested_version"
+    echo_message "Attempting to switch to $target_php_binary..."
+
+    # 1. Check if target version is installed
+    if ! [ -f "$target_php_binary" ]; then
+        echo_error "Target PHP version $requested_version does not appear to be installed at $target_php_binary."
+        echo "Please run \`phpswitcher install $requested_version\` first."
+        exit 1
+    fi
+    echo "PHP $requested_version is installed."
+
+    # 2. Switch the active PHP version using update-alternatives
+    echo_message "Switching active PHP version..."
+    if sudo update-alternatives --set php "$target_php_binary"; then
+        echo "$requested_version" > "$PHPSWITCHER_DIR/active_version"
+        echo_message "Successfully switched to PHP $requested_version!"
+        echo "Run 'php --version' to verify."
+    else
+        echo_error "Failed to switch to PHP $requested_version using update-alternatives."
+        echo "You may need to configure it manually:"
+        echo "  sudo update-alternatives --config php"
+        exit 1
+    fi
+}
+
+command_install_linux() {
+    local requested_version="$1"
+
+    # --- Version Auto-Detection (similar to 'use' command) ---
+    if [ -z "$requested_version" ]; then
+        echo_message "Version argument missing, attempting auto-detection..."
+        if ! requested_version=$(detect_version); then
+            echo_error "PHP version not specified and could not be detected automatically."
+            echo "Usage: phpswitcher install [<version>]"
+            exit 1
+        fi
+    fi
+
+    # --- Version Validation ---
+    if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo_error "Invalid version format: \"$requested_version\". Please use format X.Y (e.g., 7.4, 8.1)."
+        exit 1
+    fi
+
+    local target_package="php$requested_version"
+    echo_message "Attempting to install $target_package..."
+
+    # 1. Check if add-apt-repository is installed
+    if ! command -v add-apt-repository >/dev/null 2>&1; then
+        echo_error "The command 'add-apt-repository' is required but not found."
+        echo "Please install it, usually via the 'software-properties-common' package:"
+        echo "  sudo apt-get update"
+        echo "  sudo apt-get install software-properties-common"
+        exit 1
+    fi
+
+    # 2. Add the PPA
+    echo_message "Adding ppa:ondrej/php..."
+    sudo add-apt-repository -y ppa:ondrej/php
+
+    # 3. Update package list
+    echo_message "Updating package list..."
+    sudo apt-get update
+
+    # 4. Install the package
+    echo_message "Installing $target_package..."
+    if ! sudo apt-get install -y "$target_package"; then
+        echo_error "Failed to install $target_package via apt-get."
+        exit 1
+    fi
+    echo_message "$target_package installed successfully!"
+
+    # If interactive, ask the user if they want to switch. Otherwise, switch automatically.
+    if [ -t 0 ]; then
+        read -p "Would you like to switch to PHP $requested_version now? (y/N) " -n 1 -r REPLY
+        echo # Move to a new line
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            command_use "$requested_version"
+        fi
+    else
+        echo_message "Non-interactive mode detected. Switching to PHP $requested_version automatically."
+        command_use "$requested_version" --quiet
+    fi
+}
+
+command_use() {
+    if [ "$OS" = "macos" ]; then
+        command_use_macos "$@"
+    elif [ "$OS" = "linux" ]; then
+        command_use_linux "$@"
+    else
+        echo_error "The 'use' command is not supported on this OS."
+        exit 1
+    fi
+}
+
+command_install() {
+    if [ "$OS" = "macos" ]; then
+        command_install_macos "$@"
+    elif [ "$OS" = "linux" ]; then
+        command_install_linux "$@"
+    else
+        echo_error "The 'install' command is not supported on this OS."
+        exit 1
     fi
 }
 
 command_help() {
-    echo "help command"
+    echo "phpswitcher - A simple CLI to manage multiple PHP versions."
+    echo ""
+    echo "Usage: phpswitcher <command> [<args>]"
+    echo ""
+    echo "Available commands:"
+    echo "  install [<version>]  Install a specific PHP version (e.g., 8.1)."
+    echo "                       If <version> is omitted, it attempts to detect from composer.json."
+    echo "  use [<version>]      Switch the active PHP version."
+    echo "                       If <version> is omitted, it attempts to detect from composer.json."
+    echo "  list                 List all installed PHP versions and show the active one."
+    echo "  self-update          Update phpswitcher to the latest version."
+    echo "  version              Show the currently installed version of phpswitcher."
+    echo "  help                 Show this help message."
+    echo ""
+    echo "Platform Support:"
+    echo "  - macOS: Uses Homebrew to install and switch PHP versions (php@x.y)."
+    echo "  - Linux (Debian/Ubuntu): Uses APT with ppa:ondrej/php. Requires 'sudo' for installation and switching."
+    echo ""
+    echo "Examples:"
+    echo "  phpswitcher install 8.1"
+    echo "  phpswitcher use 7.4"
+    echo "  cd my-project/ && phpswitcher use"
+    echo "  phpswitcher self-update"
+    echo "  phpswitcher version"
 }
 
 # --- Main Dispatcher ---
 main() {
+    detect_os # Detect the OS first
+
+    # Process arguments, extracting --quiet if it exists
+    local args=()
+    export PHPSWITCHER_QUIET="false"
+    for arg in "$@"; do
+        if [ "$arg" == "--quiet" ]; then
+            export PHPSWITCHER_QUIET="true"
+        else
+            args+=("$arg")
+        fi
+    done
+    # Set the positional parameters to the new argument list
+    set -- "${args[@]}"
+
+    # Run update check in the background. Pass the first argument to it.
+    check_for_updates "$1" &
+
     local command="$1"
     shift || true # Shift off the command, ignore error if no args
 
@@ -177,6 +538,15 @@ main() {
             ;;
         install)
             command_install "$@"
+            ;;
+        list)
+            command_list
+            ;;
+        self-update)
+            command_self_update "$@"
+            ;;
+        -v|--version|version)
+            command_version
             ;;
         -h|--help|help)
             command_help
