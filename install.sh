@@ -40,9 +40,9 @@ tar -xzf "$TMP_DIR/$ARTIFACT_NAME" -C "$TMP_DIR"
 mkdir -p "$INSTALL_DIR/bin"
 
 echo_message "Installing scripts..."
-# The tarball contains 'phpswitcher' and 'phpswitcher-init.sh' at the root
-cp "$TMP_DIR/phpswitcher" "$INSTALL_DIR/bin/"
-cp "$TMP_DIR/phpswitcher-init.sh" "$INSTALL_DIR/"
+# The tarball is expected to contain a 'bin' directory with the scripts.
+cp "$TMP_DIR/bin/phpswitcher" "$INSTALL_DIR/bin/"
+cp "$TMP_DIR/bin/phpswitcher-init.sh" "$INSTALL_DIR/"
 
 # Ensure the main script is executable
 chmod +x "$INSTALL_DIR/bin/phpswitcher"
