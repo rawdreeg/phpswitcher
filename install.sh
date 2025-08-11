@@ -37,16 +37,13 @@ curl -L "$ARTIFACT_URL" -o "$TMP_DIR/$ARTIFACT_NAME"
 echo_message "Extracting the release..."
 tar -xzf "$TMP_DIR/$ARTIFACT_NAME" -C "$TMP_DIR"
 
-echo_message "--- DEBUG: Contents of temporary directory ---"
-ls -lR "$TMP_DIR"
-echo_message "--- END DEBUG ---"
-
 mkdir -p "$INSTALL_DIR/bin"
 
 echo_message "Installing scripts..."
-# The tarball is expected to contain a 'bin' directory with the scripts.
-cp "$TMP_DIR/bin/phpswitcher" "$INSTALL_DIR/bin/"
-cp "$TMP_DIR/bin/phpswitcher-init.sh" "$INSTALL_DIR/"
+# The tarball extracts into a versioned directory, e.g., 'phpswitcher-0.3.0'.
+# We use a wildcard to handle the dynamic directory name.
+cp "$TMP_DIR/phpswitcher-*/bin/phpswitcher" "$INSTALL_DIR/bin/"
+cp "$TMP_DIR/phpswitcher-*/phpswitcher-init.sh" "$INSTALL_DIR/"
 
 # Ensure the main script is executable
 chmod +x "$INSTALL_DIR/bin/phpswitcher"
