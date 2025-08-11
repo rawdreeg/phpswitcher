@@ -37,6 +37,10 @@ curl -L "$ARTIFACT_URL" -o "$TMP_DIR/$ARTIFACT_NAME"
 echo_message "Extracting the release..."
 tar -xzf "$TMP_DIR/$ARTIFACT_NAME" -C "$TMP_DIR"
 
+echo_message "--- DEBUG: Contents of temporary directory ---"
+ls -lR "$TMP_DIR"
+echo_message "--- END DEBUG ---"
+
 mkdir -p "$INSTALL_DIR/bin"
 
 echo_message "Installing scripts..."
