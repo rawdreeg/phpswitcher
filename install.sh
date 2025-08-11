@@ -87,8 +87,8 @@ fi
 if [ -z "$PROFILE_FILE" ]; then
   echo_error "Could not detect profile file (.bashrc, .bash_profile, or .zshrc)."
   echo "Please add the following lines manually to your shell profile file:"
-  printf "\n  export PHPSWITCHER_DIR=\"$HOME/.phpswitcher\""
-  printf "\n  export PATH=\"$INSTALL_DIR/bin:\$PATH\"\n\n"
+  printf '\n  export PHPSWITCHER_DIR="%s/.phpswitcher"\n' "$HOME"
+  printf '  export PATH="%s/bin:$PATH"\n\n' "$INSTALL_DIR"
   exit 1
 fi
 
@@ -97,9 +97,11 @@ echo "Detected profile file: $PROFILE_FILE"
 # Check if already configured
 if ! grep -q "PHPSWITCHER_DIR=" "$PROFILE_FILE"; then
   echo "Adding phpswitcher configuration to $PROFILE_FILE..."
-  printf "\n# PHP Switcher Configuration\n" >> "$PROFILE_FILE"
-  printf "export PHPSWITCHER_DIR=\"%s\"\n" "$INSTALL_DIR" >> "$PROFILE_FILE"
-  printf "export PATH=\"%s/bin:\$PATH\"\n" "$INSTALL_DIR" >> "$PROFILE_FILE"
+  {
+    printf "\n# PHP Switcher Configuration\n"
+    printf "export PHPSWITCHER_DIR=\"%s\"\n" "$INSTALL_DIR"
+    printf "export PATH=\"%s/bin:\$PATH\"\n" "$INSTALL_DIR"
+  } >> "$PROFILE_FILE"
 else
   echo "phpswitcher already configured in $PROFILE_FILE."
 fi
