@@ -88,7 +88,7 @@ if [ -z "$PROFILE_FILE" ]; then
   echo_error "Could not detect profile file (.bashrc, .bash_profile, or .zshrc)."
   echo "Please add the following lines manually to your shell profile file:"
   printf '\n  export PHPSWITCHER_DIR="%s/.phpswitcher"\n' "$HOME"
-  printf '  export PATH="%s/bin:%s"\n\n' "$INSTALL_DIR" '$PATH'
+  printf '  export PATH="%s/bin:%s"\n\n' "$INSTALL_DIR" "\$PATH"
   exit 1
 fi
 
