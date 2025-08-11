@@ -20,11 +20,15 @@ command_exists() {
 }
 
 # Fetch the latest release artifact URL
-ARTIFACT_URL=$(curl -s https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'browser_download_url.*phpswitcher\.tar\.gz' | cut -d '"' -f 4)
-if [ -z "$ARTIFACT_URL" ]; then
-    echo_error "Could not find the latest release artifact URL. Please check the repository."
+echo_message "Fetching latest release information from GitHub..."
+API_URL="https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest"
+ARTIFACT_URL=$(curl -s "$API_URL" | jq -r '.assets[] | select(.name=="phpswitcher.tar.gz") | .browser_download_url')
+
+if [ -z "$ARTIFACT_URL" ] || [ "$ARTIFACT_URL" == "null" ]; then
+    echo_error "Could not find the latest release artifact URL. Please check the repository or the API response from $API_URL"
     exit 1
 fi
+
 ARTIFACT_NAME="phpswitcher.tar.gz"
 
 # --- Dependency Checks ---
@@ -37,6 +41,11 @@ fi
 
 if ! command_exists curl; then
   echo_error "Error: curl is required but not installed. Please install it and try again."
+  exit 1
+fi
+
+if ! command_exists jq; then
+  echo_error "Error: jq is required but not installed. Please install it and try again."
   exit 1
 fi
 
