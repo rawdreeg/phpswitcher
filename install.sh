@@ -6,8 +6,7 @@ set -e # Exit immediately if a command exits with a non-zero status.
 export PHPSWITCHER_DIR="${PHPSWITCHER_DIR:-$HOME/.phpswitcher}"
 INSTALL_DIR="$PHPSWITCHER_DIR"
 
-# This is a local installer for development.
-# It will install phpswitcher from the current repository clone.
+# This script installs phpswitcher from the latest GitHub release.
 
 # Helper function for printing messages
 echo_message() {
@@ -19,18 +18,39 @@ echo_error() {
 }
 
 # --- Installation ---
-echo_message "Installing phpswitcher from local repository..."
+echo_message "Installing phpswitcher..."
+
+# Fetch the latest release artifact URL
+echo_message "Fetching the latest release from GitHub..."
+ARTIFACT_URL=$(curl -s https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'browser_download_url.*phpswitcher\.tar\.gz' | cut -d '"' -f 4)
+if [ -z "$ARTIFACT_URL" ]; then
+    echo_error "Could not find the latest release artifact URL. Please check the repository."
+    exit 1
+fi
+
+ARTIFACT_NAME="phpswitcher.tar.gz"
+TMP_DIR=$(mktemp -d)
+
+echo_message "Downloading the latest release..."
+curl -L "$ARTIFACT_URL" -o "$TMP_DIR/$ARTIFACT_NAME"
+
+echo_message "Extracting the release..."
+tar -xzf "$TMP_DIR/$ARTIFACT_NAME" -C "$TMP_DIR"
 
 mkdir -p "$INSTALL_DIR/bin"
 
-# Copy the main script and the init script
-cp "bin/phpswitcher" "$INSTALL_DIR/bin/"
-cp "bin/phpswitcher-init.sh" "$INSTALL_DIR/" # Place init script in the root
+echo_message "Installing scripts..."
+# The tarball contains 'phpswitcher' and 'phpswitcher-init.sh' at the root
+cp "$TMP_DIR/phpswitcher" "$INSTALL_DIR/bin/"
+cp "$TMP_DIR/phpswitcher-init.sh" "$INSTALL_DIR/"
 
 # Ensure the main script is executable
 chmod +x "$INSTALL_DIR/bin/phpswitcher"
 
 echo "Installation of scripts successful."
+
+echo_message "Cleaning up..."
+rm -rf "$TMP_DIR"
 
 # --- Setup Environment / Profile ---
 echo_message "Setting up environment..."
