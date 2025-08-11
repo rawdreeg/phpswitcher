@@ -6,8 +6,6 @@ set -e # Exit immediately if a command exits with a non-zero status.
 export PHPSWITCHER_DIR="${PHPSWITCHER_DIR:-$HOME/.phpswitcher}"
 INSTALL_DIR="$PHPSWITCHER_DIR"
 
-# This script installs phpswitcher from the latest GitHub release.
-
 # Helper function for printing messages
 echo_message() {
   printf "\n%s\n" "$1"
@@ -17,41 +15,58 @@ echo_error() {
   printf "\n\033[0;31m%s\033[0m\n" "$1" >&2
 }
 
-# --- Installation ---
-echo_message "Installing phpswitcher..."
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
 
 # Fetch the latest release artifact URL
-echo_message "Fetching the latest release from GitHub..."
 ARTIFACT_URL=$(curl -s https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'browser_download_url.*phpswitcher\.tar\.gz' | cut -d '"' -f 4)
 if [ -z "$ARTIFACT_URL" ]; then
     echo_error "Could not find the latest release artifact URL. Please check the repository."
     exit 1
 fi
-
 ARTIFACT_NAME="phpswitcher.tar.gz"
-TMP_DIR=$(mktemp -d)
 
-echo_message "Downloading the latest release..."
-curl -L "$ARTIFACT_URL" -o "$TMP_DIR/$ARTIFACT_NAME"
+# --- Dependency Checks ---
+echo_message "Checking dependencies..."
 
-echo_message "Extracting the release..."
-tar -xzf "$TMP_DIR/$ARTIFACT_NAME" -C "$TMP_DIR"
+if ! command_exists tar; then
+  echo_error "Error: tar is not installed. Please install tar and try again."
+  exit 1
+fi
 
-mkdir -p "$INSTALL_DIR/bin"
+if ! command_exists curl; then
+  echo_error "Error: curl is required but not installed. Please install it and try again."
+  exit 1
+fi
 
-echo_message "Installing scripts..."
-# The tarball extracts into a versioned directory, e.g., 'phpswitcher-0.3.0'.
-# We use a wildcard to handle the dynamic directory name.
-cp "$TMP_DIR/phpswitcher-*/bin/phpswitcher" "$INSTALL_DIR/bin/"
-cp "$TMP_DIR/phpswitcher-*/phpswitcher-init.sh" "$INSTALL_DIR/"
+echo "Dependencies found."
 
-# Ensure the main script is executable
-chmod +x "$INSTALL_DIR/bin/phpswitcher"
+# --- Download and Extract Build Artifact ---
+echo_message "Downloading phpswitcher artifact..."
 
-echo "Installation of scripts successful."
+mkdir -p "$INSTALL_DIR"
+TMP_FILE="/tmp/$ARTIFACT_NAME"
 
-echo_message "Cleaning up..."
-rm -rf "$TMP_DIR"
+echo "Downloading from: $ARTIFACT_URL"
+if curl -L --fail --progress-bar -o "$TMP_FILE" "$ARTIFACT_URL"; then
+    echo "Download successful."
+else
+    echo_error "Failed to download artifact from $ARTIFACT_URL"
+    rm -f "$TMP_FILE" # Clean up partial download
+    exit 1
+fi
+
+echo_message "Extracting phpswitcher..."
+# Use --strip-components=1 as the archive contains a top-level directory like phpswitcher-X.Y.Z/
+if tar -xzf "$TMP_FILE" -C "$INSTALL_DIR" --strip-components=1; then
+    echo "Extraction successful."
+    rm -f "$TMP_FILE" # Clean up downloaded tarball
+else
+    echo_error "Failed to extract artifact $TMP_FILE"
+    rm -f "$TMP_FILE"
+    exit 1
+fi
 
 # --- Setup Environment / Profile ---
 echo_message "Setting up environment..."
@@ -72,34 +87,21 @@ fi
 if [ -z "$PROFILE_FILE" ]; then
   echo_error "Could not detect profile file (.bashrc, .bash_profile, or .zshrc)."
   echo "Please add the following lines manually to your shell profile file:"
-  printf "\n  export PHPSWITCHER_DIR=\"%s\"" "$INSTALL_DIR"
-  printf "\n  export PATH=\"%s/bin:\$PATH\"\n\n" "$INSTALL_DIR"
+  printf "\n  export PHPSWITCHER_DIR=\"$HOME/.phpswitcher\""
+  printf "\n  export PATH=\"$INSTALL_DIR/bin:\$PATH\"\n\n"
   exit 1
 fi
 
 echo "Detected profile file: $PROFILE_FILE"
 
-# Add configuration to profile if it's not already there.
+# Check if already configured
 if ! grep -q "PHPSWITCHER_DIR=" "$PROFILE_FILE"; then
   echo "Adding phpswitcher configuration to $PROFILE_FILE..."
-  {
-    printf "\n# PHP Switcher Configuration\n"
-    printf "export PHPSWITCHER_DIR=\"%s\"\n" "$INSTALL_DIR"
-    printf "export PATH=\"%s/bin:\$PATH\"\n" "$INSTALL_DIR"
-  } >> "$PROFILE_FILE"
+  printf "\n# PHP Switcher Configuration\n" >> "$PROFILE_FILE"
+  printf "export PHPSWITCHER_DIR=\"%s\"\n" "$INSTALL_DIR" >> "$PROFILE_FILE"
+  printf "export PATH=\"%s/bin:\$PATH\"\n" "$INSTALL_DIR" >> "$PROFILE_FILE"
 else
-  echo "phpswitcher PATH already configured in $PROFILE_FILE."
-fi
-
-# Add shell integration sourcing if it's not already there
-if ! grep -q "phpswitcher-init.sh" "$PROFILE_FILE"; then
-  echo "Adding shell integration to $PROFILE_FILE..."
-  {
-    printf "\n# PHP Switcher Shell Integration\n"
-    printf "source \"%s/phpswitcher-init.sh\"\n" "$INSTALL_DIR"
-  } >> "$PROFILE_FILE"
-else
-  echo "phpswitcher shell integration already configured in $PROFILE_FILE."
+  echo "phpswitcher already configured in $PROFILE_FILE."
 fi
 
 # --- Final Message ---
@@ -108,4 +110,4 @@ echo "Please restart your terminal session or run the following command to load 
 echo "  source $PROFILE_FILE"
 echo "After that, you can use the 'phpswitcher' command."
 
-exit 0 
+exit 0
