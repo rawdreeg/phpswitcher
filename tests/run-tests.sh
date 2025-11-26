@@ -5,6 +5,13 @@
 
 set -uo pipefail # Track unset variables and pipe failures; we handle exit codes manually
 
+# --- Setup ---
+# Update Homebrew on macOS to ensure latest formulae (including icu4c@78 for PHP 7.4)
+if [[ "$(uname)" == "Darwin" ]]; then
+    echo "Updating Homebrew formulae database..."
+    brew update
+fi
+
 # --- Test Helpers ---
 # These functions help in asserting test outcomes.
 
