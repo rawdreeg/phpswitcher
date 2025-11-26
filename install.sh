@@ -98,10 +98,15 @@ if ! grep -q "PHPSWITCHER_DIR=" "$PROFILE_FILE"; then
     printf "\n# PHP Switcher Configuration\n"
     printf "export PHPSWITCHER_DIR=\"%s\"\n" "$INSTALL_DIR"
     printf "export PATH=\"%s/bin:\$PATH\"\n" "$INSTALL_DIR"
+    printf "[ -s \"%s/bin/phpswitcher.sh\" ] && . \"%s/bin/phpswitcher.sh\" # Load phpswitcher auto-switcher\n" "$INSTALL_DIR" "$INSTALL_DIR"
   } >> "$PROFILE_FILE"
 else
   echo "phpswitcher already configured in $PROFILE_FILE."
 fi
+
+# Make the scripts executable
+chmod +x "$INSTALL_DIR/bin/phpswitcher"
+chmod +x "$INSTALL_DIR/bin/phpswitcher.sh"
 
 # --- Final Message ---
 echo_message "phpswitcher installation complete!"
