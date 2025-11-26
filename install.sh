@@ -86,7 +86,7 @@ if [ -z "$PROFILE_FILE" ]; then
   echo "Please add the following lines manually to your shell profile file:"
   printf '\n  export PHPSWITCHER_DIR="%s/.phpswitcher"\n' "$HOME"
   printf '  export PATH="%s/bin:%s"\n' "$INSTALL_DIR" "\$PATH"
-  printf '  source "$PHPSWITCHER_DIR/phpswitcher-init.sh"\n\n'
+  printf "  source \"\$PHPSWITCHER_DIR/phpswitcher-init.sh\"\n\n"
   exit 1
 fi
 
