@@ -3,7 +3,7 @@
 set -euo pipefail # Exit on errors, unset vars, pipe failures
 
 # --- Configuration ---
-VERSION="0.3.1"
+VERSION="0.4.0-beta.1"
 ARCHIVE_NAME="phpswitcher.tar.gz"
 BUILD_DIR="_build"
 STAGING_DIR="$BUILD_DIR/phpswitcher-$VERSION"
@@ -31,6 +31,8 @@ echo_message "[2/3] Copying application files..."
 cp "bin/phpswitcher" "$STAGING_DIR/bin/"
 cp "bin/phpswitcher-init.sh" "$STAGING_DIR/"
 cp "bin/phpswitcher-completion.sh" "$STAGING_DIR/"
+cp "bin/phpswitcher-init.fish" "$STAGING_DIR/"
+cp "bin/phpswitcher-completion.fish" "$STAGING_DIR/"
 cp "install.sh" "$STAGING_DIR/"
 cp "README.md" "$STAGING_DIR/"
 cp "LICENSE" "$STAGING_DIR/"
