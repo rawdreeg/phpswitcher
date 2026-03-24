@@ -12,6 +12,17 @@ cleanup() {
 trap cleanup EXIT
 
 # --- Setup ---
+# If running from the repo checkout, copy local scripts over the installed ones
+# so that tests exercise the current branch code, not the latest release.
+PHPSWITCHER_DIR="${PHPSWITCHER_DIR:-$HOME/.phpswitcher}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -f "$SCRIPT_DIR/bin/phpswitcher" ] && [ -d "$PHPSWITCHER_DIR/bin" ]; then
+    echo "Copying local scripts to $PHPSWITCHER_DIR for testing..."
+    cp "$SCRIPT_DIR/bin/phpswitcher" "$PHPSWITCHER_DIR/bin/phpswitcher"
+    [ -f "$SCRIPT_DIR/bin/phpswitcher-init.sh" ] && cp "$SCRIPT_DIR/bin/phpswitcher-init.sh" "$PHPSWITCHER_DIR/phpswitcher-init.sh"
+    [ -f "$SCRIPT_DIR/bin/phpswitcher-completion.sh" ] && cp "$SCRIPT_DIR/bin/phpswitcher-completion.sh" "$PHPSWITCHER_DIR/phpswitcher-completion.sh"
+fi
+
 # Update Homebrew on macOS to ensure latest formulae (including icu4c@78 for PHP 7.4)
 if [[ "$(uname)" == "Darwin" ]]; then
     echo "Updating Homebrew formulae database..."
