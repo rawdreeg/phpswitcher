@@ -22,8 +22,6 @@ command_exists() {
 # Define constants for the download
 ARTIFACT_URL="https://github.com/rawdreeg/phpswitcher/releases/latest/download/phpswitcher.tar.gz"
 
-ARTIFACT_NAME="phpswitcher.tar.gz"
-
 # --- Dependency Checks ---
 echo_message "Checking dependencies..."
 
