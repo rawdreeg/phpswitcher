@@ -3,7 +3,7 @@
 set -euo pipefail # Exit on errors, unset vars, pipe failures
 
 # --- Configuration ---
-VERSION="0.3.1"
+VERSION="0.4.0-beta.1"
 ARCHIVE_NAME="phpswitcher.tar.gz"
 BUILD_DIR="_build"
 STAGING_DIR="$BUILD_DIR/phpswitcher-$VERSION"
