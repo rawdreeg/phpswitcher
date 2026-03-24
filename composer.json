@@ -1,0 +1,33 @@
+{
+    "name": "rawdreeg/phpswitcher",
+    "description": "CLI tool to manage and switch between multiple PHP versions on macOS and Linux",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "php",
+        "version-manager",
+        "php-switcher",
+        "cli",
+        "homebrew",
+        "apt"
+    ],
+    "authors": [
+        {
+            "name": "Rodrigue",
+            "homepage": "https://github.com/rawdreeg"
+        }
+    ],
+    "homepage": "https://github.com/rawdreeg/phpswitcher",
+    "support": {
+        "issues": "https://github.com/rawdreeg/phpswitcher/issues",
+        "source": "https://github.com/rawdreeg/phpswitcher"
+    },
+    "bin": [
+        "bin/phpswitcher"
+    ],
+    "require": {},
+    "config": {
+        "preferred-install": "dist",
+        "sort-packages": true
+    }
+}
