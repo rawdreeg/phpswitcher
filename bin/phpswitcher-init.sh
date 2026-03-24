@@ -27,6 +27,14 @@ _phpswitcher_auto_switch() {
         fi
     fi
 
+    # 3. Fallback to global default version.
+    if [ -z "$required_version" ]; then
+        local default_version_file="${PHPSWITCHER_DIR:-$HOME/.phpswitcher}/default_version"
+        if [ -f "$default_version_file" ]; then
+            required_version=$(cat "$default_version_file")
+        fi
+    fi
+
     # If a version was detected, process it.
     if [ -n "$required_version" ]; then
         # Get the version currently marked as active by phpswitcher.

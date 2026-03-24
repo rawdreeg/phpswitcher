@@ -21,6 +21,8 @@ if [ -f "$SCRIPT_DIR/bin/phpswitcher" ] && [ -d "$PHPSWITCHER_DIR/bin" ]; then
     cp "$SCRIPT_DIR/bin/phpswitcher" "$PHPSWITCHER_DIR/bin/phpswitcher"
     [ -f "$SCRIPT_DIR/bin/phpswitcher-init.sh" ] && cp "$SCRIPT_DIR/bin/phpswitcher-init.sh" "$PHPSWITCHER_DIR/phpswitcher-init.sh"
     [ -f "$SCRIPT_DIR/bin/phpswitcher-completion.sh" ] && cp "$SCRIPT_DIR/bin/phpswitcher-completion.sh" "$PHPSWITCHER_DIR/phpswitcher-completion.sh"
+    [ -f "$SCRIPT_DIR/bin/phpswitcher-init.fish" ] && cp "$SCRIPT_DIR/bin/phpswitcher-init.fish" "$PHPSWITCHER_DIR/phpswitcher-init.fish"
+    [ -f "$SCRIPT_DIR/bin/phpswitcher-completion.fish" ] && cp "$SCRIPT_DIR/bin/phpswitcher-completion.fish" "$PHPSWITCHER_DIR/phpswitcher-completion.fish"
 fi
 
 # Update Homebrew on macOS to ensure latest formulae (including icu4c@78 for PHP 7.4)
@@ -187,6 +189,64 @@ test_no_args() {
 }
 
 
+# Test the 'default' command
+test_default_command() {
+    test_case "Set global default version"
+    phpswitcher default 8.1
+    assert_success $? "phpswitcher default 8.1"
+
+    test_case "Show global default version"
+    local output
+    output=$(phpswitcher default 2>&1)
+    assert_contains "$output" "8.1" "Default command shows 8.1"
+
+    test_case "Unset global default version"
+    phpswitcher default --unset
+    assert_success $? "phpswitcher default --unset"
+
+    test_case "Default is unset"
+    output=$(phpswitcher default 2>&1)
+    assert_contains "$output" "No global default" "Default is unset"
+}
+
+# Test the 'status' command
+test_status_command() {
+    test_case "Status command"
+    local output
+    output=$(phpswitcher status 2>&1)
+    assert_contains "$output" "PHP Switcher Status" "Status command shows header"
+    assert_contains "$output" "Active PHP version:" "Status shows active version"
+    assert_contains "$output" "Version detection" "Status shows detection info"
+}
+
+# Test the 'default' version detection fallback
+test_default_version_detection() {
+    test_case "Default version used when no .php-version or composer.json"
+    phpswitcher default 8.1
+    assert_success $? "Set default to 8.1 for detection test"
+
+    # Create a directory without .php-version or composer.json
+    mkdir -p test_project_empty
+    (
+        cd test_project_empty
+        phpswitcher use
+        assert_success $? "phpswitcher use (with default fallback)"
+    )
+    rm -rf test_project_empty
+
+    # Clean up default
+    phpswitcher default --unset
+}
+
+# Test the 'extensions' command (list only — install requires real packages)
+test_extensions_command() {
+    test_case "Extensions list command"
+    local output
+    output=$(phpswitcher extensions 8.1 2>&1)
+    # Should either list extensions or show an error about the version
+    assert_success $? "phpswitcher extensions 8.1 runs without crash"
+}
+
 # --- Main Test Runner ---
 main() {
     echo "========================================"
@@ -203,6 +263,10 @@ main() {
     test_version_command
     test_help_command
     test_no_args
+    test_default_command
+    test_status_command
+    test_default_version_detection
+    test_extensions_command
 
     echo "----------------------------------------"
     if [ "$FAIL_COUNT" -eq 0 ]; then

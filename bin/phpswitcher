@@ -99,6 +99,17 @@ detect_version() {
         fi
     fi
 
+    # 3. Fallback to global default version
+    local default_version_file="$PHPSWITCHER_DIR/default_version"
+    if [ -f "$default_version_file" ]; then
+        detected_version=$(cat "$default_version_file")
+        if [ -n "$detected_version" ]; then
+            echo_message "Using global default version $detected_version."
+            echo "$detected_version"
+            return 0
+        fi
+    fi
+
     return 1 # Not detected
 }
 
@@ -607,6 +618,259 @@ command_install() {
     fi
 }
 
+# --- Default Command ---
+
+command_default() {
+    local default_version_file="$PHPSWITCHER_DIR/default_version"
+
+    if [ "${1:-}" == "--unset" ]; then
+        if [ -f "$default_version_file" ]; then
+            rm -f "$default_version_file"
+            echo_message "Global default PHP version has been unset."
+        else
+            echo "No global default version is set."
+        fi
+        return
+    fi
+
+    local requested_version="${1:-}"
+
+    if [ -z "$requested_version" ]; then
+        # Show current default
+        if [ -f "$default_version_file" ]; then
+            echo "Global default PHP version: $(cat "$default_version_file")"
+        else
+            echo "No global default PHP version is set."
+            echo "Usage: phpswitcher default <version>"
+        fi
+        return
+    fi
+
+    # Validate version format
+    if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo_error "Invalid version format: \"$requested_version\". Please use format X.Y (e.g., 7.4, 8.1)."
+        exit 1
+    fi
+
+    echo "$requested_version" > "$default_version_file"
+    echo_message "Global default PHP version set to $requested_version."
+    echo "This version will be used when no .php-version file or composer.json is found."
+}
+
+# --- Status Command ---
+
+command_status() {
+    echo "PHP Switcher Status"
+    echo "==================="
+
+    # 1. Active PHP version
+    local active_version=""
+    local active_version_file="$PHPSWITCHER_DIR/active_version"
+    if [ -f "$active_version_file" ]; then
+        active_version=$(cat "$active_version_file")
+    fi
+
+    local php_path=""
+    local php_reported_version=""
+    if command -v php >/dev/null 2>&1; then
+        php_path=$(command -v php)
+        php_reported_version=$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;' 2>/dev/null || echo "unknown")
+    fi
+
+    echo ""
+    echo "Active PHP version: ${active_version:-unknown}"
+    if [ -n "$php_reported_version" ]; then
+        echo "PHP reports version: $php_reported_version"
+    fi
+    if [ -n "$php_path" ]; then
+        echo "PHP binary path:    $php_path"
+    else
+        echo "PHP binary path:    (not found in PATH)"
+    fi
+
+    # 2. php.ini path
+    if command -v php >/dev/null 2>&1; then
+        local ini_path
+        ini_path=$(php -r 'echo php_ini_loaded_file();' 2>/dev/null || echo "")
+        if [ -n "$ini_path" ]; then
+            echo "Loaded php.ini:     $ini_path"
+        fi
+    fi
+
+    # 3. Detection source for current directory
+    echo ""
+    echo "Version detection for current directory:"
+
+    local detected_source="none"
+    local detected_ver=""
+
+    # Check .php-version
+    local dir="$PWD"
+    while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+        if [ -f "$dir/.php-version" ]; then
+            detected_ver=$(head -n 1 "$dir/.php-version" | tr -d '[:space:]')
+            detected_source=".php-version ($dir/.php-version)"
+            break
+        fi
+        dir=$(dirname "$dir")
+    done
+
+    # Check composer.json
+    if [ -z "$detected_ver" ] && [ -f "./composer.json" ]; then
+        local constraint
+        constraint=$(grep -o '"php": *"[^"]*"' "./composer.json" | head -n 1)
+        if [[ "$constraint" =~ ([0-9]+\.[0-9]+) ]]; then
+            detected_ver="${BASH_REMATCH[1]}"
+            detected_source="composer.json (./composer.json)"
+        fi
+    fi
+
+    # Check default
+    if [ -z "$detected_ver" ]; then
+        local default_version_file="$PHPSWITCHER_DIR/default_version"
+        if [ -f "$default_version_file" ]; then
+            detected_ver=$(cat "$default_version_file")
+            detected_source="global default"
+        fi
+    fi
+
+    if [ -n "$detected_ver" ]; then
+        echo "  Detected version: $detected_ver"
+        echo "  Source:           $detected_source"
+    else
+        echo "  No version detected (no .php-version, composer.json, or default set)"
+    fi
+
+    # 4. Default version
+    echo ""
+    local default_version_file="$PHPSWITCHER_DIR/default_version"
+    if [ -f "$default_version_file" ]; then
+        echo "Global default:     $(cat "$default_version_file")"
+    else
+        echo "Global default:     (not set)"
+    fi
+}
+
+# --- Extensions Command ---
+
+command_extensions_list() {
+    local requested_version="$1"
+
+    if [ "$OS" = "macos" ]; then
+        echo_message "Installed extensions for PHP $requested_version:"
+        local php_bin
+        php_bin="$(brew --prefix)/opt/php@$requested_version/bin/php"
+        if [ ! -x "$php_bin" ]; then
+            echo_error "PHP $requested_version does not appear to be installed."
+            exit 1
+        fi
+        "$php_bin" -m 2>/dev/null | tail -n +2
+    elif [ "$OS" = "linux" ]; then
+        echo_message "Installed extensions for PHP $requested_version:"
+        local php_bin="/usr/bin/php$requested_version"
+        if [ ! -x "$php_bin" ]; then
+            echo_error "PHP $requested_version does not appear to be installed."
+            exit 1
+        fi
+        "$php_bin" -m 2>/dev/null | tail -n +2
+    fi
+}
+
+command_extensions_install() {
+    local extension="$1"
+    local requested_version="$2"
+
+    if [ "$OS" = "macos" ]; then
+        echo_message "Installing $extension for PHP $requested_version via PECL..."
+        local pecl_bin
+        pecl_bin="$(brew --prefix)/opt/php@$requested_version/bin/pecl"
+        if [ ! -x "$pecl_bin" ]; then
+            echo_error "PECL not found for PHP $requested_version. Is it installed?"
+            exit 1
+        fi
+        if "$pecl_bin" install "$extension"; then
+            echo_message "Extension $extension installed successfully for PHP $requested_version."
+        else
+            echo_error "Failed to install extension $extension."
+            exit 1
+        fi
+    elif [ "$OS" = "linux" ]; then
+        local target_package="php${requested_version}-${extension}"
+        echo_message "Installing $target_package via apt..."
+        if sudo apt-get install -y "$target_package"; then
+            echo_message "Extension $extension installed successfully for PHP $requested_version."
+        else
+            echo_error "Failed to install $target_package. Try checking available packages with: apt-cache search php${requested_version}-"
+            exit 1
+        fi
+    fi
+}
+
+command_extensions() {
+    local subcommand="${1:-}"
+    shift || true
+
+    case "$subcommand" in
+        install)
+            local extension="${1:-}"
+            if [ -z "$extension" ]; then
+                echo_error "Please specify an extension to install."
+                echo "Usage: phpswitcher extensions install <extension> [<version>]"
+                exit 1
+            fi
+            local requested_version="${2:-}"
+            if [ -z "$requested_version" ]; then
+                # Try to detect or use active version
+                local active_version_file="$PHPSWITCHER_DIR/active_version"
+                if [ -f "$active_version_file" ]; then
+                    requested_version=$(cat "$active_version_file")
+                fi
+                if [ -z "$requested_version" ]; then
+                    echo_error "Could not determine PHP version. Please specify: phpswitcher extensions install <extension> <version>"
+                    exit 1
+                fi
+                echo_message "Using active PHP version $requested_version."
+            fi
+            if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+                echo_error "Invalid version format: \"$requested_version\". Please use format X.Y (e.g., 7.4, 8.1)."
+                exit 1
+            fi
+            command_extensions_install "$extension" "$requested_version"
+            ;;
+        ""|list)
+            # If subcommand is "list", shift and get version; if empty, get version from $1
+            local requested_version="${1:-}"
+            if [ -z "$requested_version" ]; then
+                local active_version_file="$PHPSWITCHER_DIR/active_version"
+                if [ -f "$active_version_file" ]; then
+                    requested_version=$(cat "$active_version_file")
+                fi
+                if [ -z "$requested_version" ]; then
+                    echo_error "Could not determine PHP version. Please specify: phpswitcher extensions [list] <version>"
+                    exit 1
+                fi
+                echo_message "Using active PHP version $requested_version."
+            fi
+            if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+                echo_error "Invalid version format: \"$requested_version\". Please use format X.Y (e.g., 7.4, 8.1)."
+                exit 1
+            fi
+            command_extensions_list "$requested_version"
+            ;;
+        *)
+            # Could be a version number directly (e.g., phpswitcher extensions 8.1)
+            if [[ "$subcommand" =~ ^[0-9]+\.[0-9]+$ ]]; then
+                command_extensions_list "$subcommand"
+            else
+                echo_error "Unknown extensions subcommand: $subcommand"
+                echo "Usage: phpswitcher extensions [list] [<version>]"
+                echo "       phpswitcher extensions install <extension> [<version>]"
+                exit 1
+            fi
+            ;;
+    esac
+}
+
 command_help() {
     echo "phpswitcher - A simple CLI to manage multiple PHP versions."
     echo ""
@@ -614,12 +878,18 @@ command_help() {
     echo ""
     echo "Available commands:"
     echo "  install [<version>]    Install a specific PHP version (e.g., 8.1)."
-    echo "                         If <version> is omitted, it attempts to detect from .php-version or composer.json."
+    echo "                         If <version> is omitted, it attempts to detect from .php-version, composer.json, or default."
     echo "  uninstall <version>    Uninstall a specific PHP version (e.g., 7.4)."
     echo "                         The currently active version cannot be uninstalled."
     echo "  use [<version>]        Switch the active PHP version."
-    echo "                         If <version> is omitted, it attempts to detect from .php-version or composer.json."
+    echo "                         If <version> is omitted, it attempts to detect from .php-version, composer.json, or default."
     echo "  list                   List all installed PHP versions and show the active one."
+    echo "  default [<version>]    Set or show the global default PHP version."
+    echo "                         Use --unset to remove the default."
+    echo "  status                 Show current PHP version, detection source, and path info."
+    echo "  extensions [<version>] List installed PHP extensions for a version."
+    echo "  extensions install <ext> [<version>]"
+    echo "                         Install a PHP extension (e.g., xdebug)."
     echo "  self-update            Update phpswitcher to the latest version."
     echo "  version                Show the currently installed version of phpswitcher."
     echo "  help                   Show this help message."
@@ -633,6 +903,10 @@ command_help() {
     echo "  phpswitcher uninstall 7.4"
     echo "  phpswitcher use 7.4"
     echo "  cd my-project/ && phpswitcher use"
+    echo "  phpswitcher default 8.2"
+    echo "  phpswitcher status"
+    echo "  phpswitcher extensions 8.1"
+    echo "  phpswitcher extensions install xdebug"
     echo "  phpswitcher self-update"
     echo "  phpswitcher version"
 }
@@ -672,6 +946,15 @@ main() {
             ;;
         list)
             command_list
+            ;;
+        default)
+            command_default "$@"
+            ;;
+        status)
+            command_status
+            ;;
+        extensions)
+            command_extensions "$@"
             ;;
         self-update)
             command_self_update "$@"
