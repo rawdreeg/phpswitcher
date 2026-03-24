@@ -476,6 +476,126 @@ command_use() {
     fi
 }
 
+# --- Uninstall Command ---
+
+command_uninstall_macos() {
+    local requested_version="$1"
+
+    if [ -z "$requested_version" ]; then
+        echo_error "Please specify a PHP version to uninstall."
+        echo "Usage: phpswitcher uninstall <version>"
+        exit 1
+    fi
+
+    # --- Version Validation ---
+    if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo_error "Invalid version format: \"$requested_version\". Please use format X.Y (e.g., 7.4, 8.1)."
+        exit 1
+    fi
+
+    local target_package="php@$requested_version"
+
+    # Check if installed
+    if ! brew list "$target_package" >/dev/null 2>&1; then
+        echo_error "PHP version $requested_version is not installed via Homebrew."
+        exit 1
+    fi
+
+    # Check if this is the active version
+    local active_version=""
+    local php_link
+    php_link=$(readlink "$(brew --prefix)/bin/php" 2>/dev/null || echo "")
+    if [[ "$php_link" =~ php@([0-9]+\.[0-9]+) ]]; then
+        active_version="${BASH_REMATCH[1]}"
+    fi
+
+    if [ "$requested_version" == "$active_version" ]; then
+        echo_error "Cannot uninstall PHP $requested_version because it is the currently active version."
+        echo "Please switch to a different version first with: phpswitcher use <other-version>"
+        exit 1
+    fi
+
+    # Confirm if interactive
+    if [ -t 0 ]; then
+        read -p "Are you sure you want to uninstall PHP $requested_version? (y/N) " -n 1 -r REPLY
+        echo
+        if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
+            echo "Aborted."
+            return
+        fi
+    fi
+
+    echo_message "Uninstalling $target_package..."
+    if brew uninstall "$target_package"; then
+        echo_message "PHP $requested_version has been uninstalled successfully."
+    else
+        echo_error "Failed to uninstall $target_package."
+        exit 1
+    fi
+}
+
+command_uninstall_linux() {
+    local requested_version="$1"
+
+    if [ -z "$requested_version" ]; then
+        echo_error "Please specify a PHP version to uninstall."
+        echo "Usage: phpswitcher uninstall <version>"
+        exit 1
+    fi
+
+    # --- Version Validation ---
+    if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo_error "Invalid version format: \"$requested_version\". Please use format X.Y (e.g., 7.4, 8.1)."
+        exit 1
+    fi
+
+    local target_package="php$requested_version"
+
+    # Check if installed
+    if ! dpkg -l "$target_package" 2>/dev/null | grep -q "^ii"; then
+        echo_error "PHP version $requested_version is not installed."
+        exit 1
+    fi
+
+    # Check if this is the active version
+    local active_php_path
+    active_php_path=$(readlink -f /etc/alternatives/php 2>/dev/null || echo "")
+    if [[ "$active_php_path" =~ php${requested_version}$ ]]; then
+        echo_error "Cannot uninstall PHP $requested_version because it is the currently active version."
+        echo "Please switch to a different version first with: phpswitcher use <other-version>"
+        exit 1
+    fi
+
+    # Confirm if interactive
+    if [ -t 0 ]; then
+        read -p "Are you sure you want to uninstall PHP $requested_version? (y/N) " -n 1 -r REPLY
+        echo
+        if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
+            echo "Aborted."
+            return
+        fi
+    fi
+
+    echo_message "Uninstalling $target_package and related packages..."
+    if sudo apt-get remove -y "$target_package" "php${requested_version}-"*; then
+        echo_message "PHP $requested_version has been uninstalled successfully."
+    else
+        echo_error "Failed to uninstall $target_package."
+        exit 1
+    fi
+}
+
+command_uninstall() {
+    if [ "$OS" = "macos" ]; then
+        command_uninstall_macos "$@"
+    elif [ "$OS" = "linux" ]; then
+        command_uninstall_linux "$@"
+    else
+        echo_error "The 'uninstall' command is not supported on this OS."
+        exit 1
+    fi
+}
+
 command_install() {
     if [ "$OS" = "macos" ]; then
         command_install_macos "$@"
@@ -493,14 +613,16 @@ command_help() {
     echo "Usage: phpswitcher <command> [<args>]"
     echo ""
     echo "Available commands:"
-    echo "  install [<version>]  Install a specific PHP version (e.g., 8.1)."
-    echo "                       If <version> is omitted, it attempts to detect from .php-version or composer.json."
-    echo "  use [<version>]      Switch the active PHP version."
-    echo "                       If <version> is omitted, it attempts to detect from .php-version or composer.json."
-    echo "  list                 List all installed PHP versions and show the active one."
-    echo "  self-update          Update phpswitcher to the latest version."
-    echo "  version              Show the currently installed version of phpswitcher."
-    echo "  help                 Show this help message."
+    echo "  install [<version>]    Install a specific PHP version (e.g., 8.1)."
+    echo "                         If <version> is omitted, it attempts to detect from .php-version or composer.json."
+    echo "  uninstall <version>    Uninstall a specific PHP version (e.g., 7.4)."
+    echo "                         The currently active version cannot be uninstalled."
+    echo "  use [<version>]        Switch the active PHP version."
+    echo "                         If <version> is omitted, it attempts to detect from .php-version or composer.json."
+    echo "  list                   List all installed PHP versions and show the active one."
+    echo "  self-update            Update phpswitcher to the latest version."
+    echo "  version                Show the currently installed version of phpswitcher."
+    echo "  help                   Show this help message."
     echo ""
     echo "Platform Support:"
     echo "  - macOS: Uses Homebrew to install and switch PHP versions (php@x.y)."
@@ -508,6 +630,7 @@ command_help() {
     echo ""
     echo "Examples:"
     echo "  phpswitcher install 8.1"
+    echo "  phpswitcher uninstall 7.4"
     echo "  phpswitcher use 7.4"
     echo "  cd my-project/ && phpswitcher use"
     echo "  phpswitcher self-update"
@@ -543,6 +666,9 @@ main() {
             ;;
         install)
             command_install "$@"
+            ;;
+        uninstall)
+            command_uninstall "$@"
             ;;
         list)
             command_list

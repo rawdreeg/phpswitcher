@@ -135,6 +135,14 @@ test_php_version_file_detection() {
     )
 }
 
+# Test that uninstalling the active version is blocked
+test_uninstall_active_version_blocked() {
+    test_case "Uninstall active version is blocked"
+    local output
+    output=$(phpswitcher uninstall 7.4 2>&1 || true)
+    assert_contains "$output" "currently active version" "Cannot uninstall active PHP version"
+}
+
 # Test error handling for invalid version format
 test_invalid_version_format() {
     test_case "Reject invalid version format"
@@ -180,6 +188,7 @@ main() {
     test_use_command
     test_php_version_file_detection
     test_invalid_version_format
+    test_uninstall_active_version_blocked
     test_version_command
     test_help_command
     test_no_args

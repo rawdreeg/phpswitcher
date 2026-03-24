@@ -4,28 +4,31 @@
 # This script is intended to be sourced by a shell startup file (e.g., .bashrc, .zshrc).
 
 # This function is executed when the directory changes. It checks for a
-# .php-version file and automatically switches to the specified version.
+# .php-version file or composer.json and automatically switches to the specified version.
 _phpswitcher_auto_switch() {
-    # Find the .php-version file by traversing up from the current directory.
+    local required_version=""
+
+    # 1. Find the .php-version file by traversing up from the current directory.
     local dir="$PWD"
-    local version_file=""
     while [ -n "$dir" ] && [ "$dir" != "/" ]; do
         if [ -f "$dir/.php-version" ]; then
-            version_file="$dir/.php-version"
+            required_version=$(head -n 1 "$dir/.php-version" | tr -d '[:space:]')
             break
         fi
         dir=$(dirname "$dir")
     done
 
-    # If a .php-version file was found, process it.
-    if [ -n "$version_file" ]; then
-        local required_version
-        required_version=$(head -n 1 "$version_file" | tr -d '[:space:]')
-
-        if [ -z "$required_version" ]; then
-            return # Exit if the version file is empty.
+    # 2. Fallback to composer.json in the current directory.
+    if [ -z "$required_version" ] && [ -f "$PWD/composer.json" ]; then
+        local constraint
+        constraint=$(grep -o '"php": *"[^"]*"' "$PWD/composer.json" 2>/dev/null | head -n 1)
+        if [[ "$constraint" =~ ([0-9]+\.[0-9]+) ]]; then
+            required_version="${BASH_REMATCH[1]}"
         fi
+    fi
 
+    # If a version was detected, process it.
+    if [ -n "$required_version" ]; then
         # Get the version currently marked as active by phpswitcher.
         local active_version_file="${PHPSWITCHER_DIR:-$HOME/.phpswitcher}/active_version"
         local current_version=""

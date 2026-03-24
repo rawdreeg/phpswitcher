@@ -7,10 +7,12 @@ A simple CLI tool to manage multiple PHP versions on macOS and Linux.
 ## Features
 
 *   Install specific PHP versions (via Homebrew for macOS, or APT for Linux).
+*   Uninstall PHP versions you no longer need.
 *   Switch the active PHP version.
 *   List all installed PHP versions.
 *   Auto-detect required version from `.php-version` or `composer.json`.
-*   **Automatic version switching** when you change directories.
+*   **Automatic version switching** when you change directories (supports both `.php-version` and `composer.json`).
+*   **Tab completion** for Bash and Zsh.
 
 ## Prerequisites
 
@@ -64,6 +66,16 @@ cd my-project-using-php8.0/
 phpswitcher install
 ```
 
+**Uninstall a PHP version:**
+
+Remove a PHP version that is no longer needed. The currently active version cannot be uninstalled — switch to a different version first.
+
+```bash
+phpswitcher uninstall <version>
+# Example:
+phpswitcher uninstall 7.4
+```
+
 **Switch active PHP version:**
 
 If you are in a directory containing a `composer.json` file with a PHP requirement (`require.php` or `config.platform.php`), you can omit the `<version>` argument, and `phpswitcher` will attempt to detect and use the appropriate `X.Y` version.
@@ -104,8 +116,8 @@ php --version
 ### How it Works
 
 1.  When you `cd` into a new directory, `phpswitcher` looks for a `.php-version` file in the current directory or any parent directory.
-2.  If a `.php-version` file is found, it reads the required version from it.
-3.  If the required version is not the currently active version, `phpswitcher` automatically runs `phpswitcher use` to switch to the correct version.
+2.  If no `.php-version` file is found, it checks for a `composer.json` in the current directory and reads the PHP version constraint.
+3.  If a required version is detected and it differs from the currently active version, `phpswitcher` automatically switches to it.
 
 ### Usage
 
@@ -119,6 +131,10 @@ echo "8.1" > .php-version
 Now, whenever you `cd` into this directory (or any subdirectory), `phpswitcher` will ensure that PHP 8.1 is activated automatically.
 
 This feature is enabled by default during the installation process, which adds a sourcing line to your shell's profile file (`.bashrc` or `.zshrc`).
+
+## Tab Completion
+
+Tab completion for commands and PHP versions is enabled automatically during installation for both Bash and Zsh. Type `phpswitcher` followed by Tab to see available commands, or `phpswitcher use` followed by Tab to see installed PHP versions.
 
 ## Development
 
