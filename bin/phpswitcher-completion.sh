@@ -4,7 +4,7 @@
 # This script is intended to be sourced by a shell startup file (e.g., .bashrc, .zshrc).
 
 # List of phpswitcher commands for completion.
-_phpswitcher_commands="install uninstall use list self-update version help"
+_phpswitcher_commands="install uninstall use list default status extensions self-update version help"
 
 # Get installed PHP versions for completing version arguments.
 _phpswitcher_installed_versions() {
@@ -31,13 +31,19 @@ if [ -n "$BASH_VERSION" ]; then
 
         # Complete versions for commands that accept a version argument
         case "$prev" in
-            install|uninstall|use)
+            install|uninstall|use|default|extensions)
                 local versions
                 versions=$(_phpswitcher_installed_versions)
                 COMPREPLY=( $(compgen -W "$versions" -- "$cur") )
                 return
                 ;;
         esac
+
+        # Complete subcommands for extensions
+        if [ "${COMP_WORDS[1]}" = "extensions" ] && [ "$COMP_CWORD" -eq 2 ]; then
+            COMPREPLY=( $(compgen -W "list install" -- "$cur") )
+            return
+        fi
     }
 
     complete -F _phpswitcher_bash_complete phpswitcher
@@ -52,6 +58,9 @@ if [ -n "$ZSH_VERSION" ]; then
             'uninstall:Uninstall a specific PHP version'
             'use:Switch the active PHP version'
             'list:List all installed PHP versions'
+            'default:Set or show the global default PHP version'
+            'status:Show current PHP version and detection info'
+            'extensions:List or install PHP extensions'
             'self-update:Update phpswitcher to the latest version'
             'version:Show the phpswitcher version'
             'help:Show help message'
@@ -68,7 +77,7 @@ if [ -n "$ZSH_VERSION" ]; then
                 ;;
             argument)
                 case "${words[2]}" in
-                    install|uninstall|use)
+                    install|uninstall|use|default|extensions)
                         local -a versions
                         versions=( ${(f)"$(_phpswitcher_installed_versions)"} )
                         if [ ${#versions[@]} -gt 0 ]; then

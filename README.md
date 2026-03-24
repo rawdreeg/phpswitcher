@@ -10,9 +10,12 @@ A simple CLI tool to manage multiple PHP versions on macOS and Linux.
 *   Uninstall PHP versions you no longer need.
 *   Switch the active PHP version.
 *   List all installed PHP versions.
-*   Auto-detect required version from `.php-version` or `composer.json`.
-*   **Automatic version switching** when you change directories (supports both `.php-version` and `composer.json`).
-*   **Tab completion** for Bash and Zsh.
+*   Auto-detect required version from `.php-version`, `composer.json`, or global default.
+*   **Global default version** — set a fallback PHP version used when no project-level config is found.
+*   **Automatic version switching** when you change directories (supports `.php-version`, `composer.json`, and global default).
+*   **Status command** — see active PHP version, detection source, and path info at a glance.
+*   **Extensions management** — list or install PHP extensions for any version.
+*   **Tab completion** for Bash, Zsh, and Fish.
 
 ## Prerequisites
 
@@ -90,6 +93,63 @@ cd my-project-using-php7.4/
 phpswitcher use
 ```
 
+**Set a global default PHP version:**
+
+Set a fallback version that's used when no `.php-version` file or `composer.json` is found in the directory tree:
+
+```bash
+phpswitcher default 8.2
+
+# Show the current default:
+phpswitcher default
+
+# Remove the default:
+phpswitcher default --unset
+```
+
+**Show status:**
+
+Display the current active PHP version, how it was detected, and path information:
+
+```bash
+phpswitcher status
+# Example Output:
+#
+# PHP Switcher Status
+# ===================
+#
+# Active PHP version: 8.1
+# PHP reports version: 8.1
+# PHP binary path:    /usr/bin/php8.1
+# Loaded php.ini:     /etc/php/8.1/cli/php.ini
+#
+# Version detection for current directory:
+#   Detected version: 8.1
+#   Source:           .php-version (/home/user/project/.php-version)
+#
+# Global default:     8.2
+```
+
+**Manage PHP extensions:**
+
+List installed extensions for a PHP version, or install new ones:
+
+```bash
+# List extensions for the active PHP version:
+phpswitcher extensions
+
+# List extensions for a specific version:
+phpswitcher extensions 8.1
+
+# Install an extension (uses active version):
+phpswitcher extensions install xdebug
+
+# Install an extension for a specific version:
+phpswitcher extensions install redis 8.1
+```
+
+On Linux, extensions are installed via `apt` (e.g., `php8.1-xdebug`). On macOS, PECL is used.
+
 **Show Version:**
 
 ```bash
@@ -117,7 +177,8 @@ php --version
 
 1.  When you `cd` into a new directory, `phpswitcher` looks for a `.php-version` file in the current directory or any parent directory.
 2.  If no `.php-version` file is found, it checks for a `composer.json` in the current directory and reads the PHP version constraint.
-3.  If a required version is detected and it differs from the currently active version, `phpswitcher` automatically switches to it.
+3.  If neither is found, it falls back to the global default version (if set via `phpswitcher default`).
+4.  If a required version is detected and it differs from the currently active version, `phpswitcher` automatically switches to it.
 
 ### Usage
 
@@ -130,11 +191,15 @@ echo "8.1" > .php-version
 
 Now, whenever you `cd` into this directory (or any subdirectory), `phpswitcher` will ensure that PHP 8.1 is activated automatically.
 
-This feature is enabled by default during the installation process, which adds a sourcing line to your shell's profile file (`.bashrc` or `.zshrc`).
+This feature is enabled by default during the installation process, which adds a sourcing line to your shell's profile file (`.bashrc`, `.zshrc`, or Fish config).
+
+### Fish Shell Support
+
+Fish shell is fully supported. The installer automatically detects Fish and creates a config file at `~/.config/fish/conf.d/phpswitcher.fish`. Auto-switching works via Fish's `--on-variable PWD` event.
 
 ## Tab Completion
 
-Tab completion for commands and PHP versions is enabled automatically during installation for both Bash and Zsh. Type `phpswitcher` followed by Tab to see available commands, or `phpswitcher use` followed by Tab to see installed PHP versions.
+Tab completion for commands and PHP versions is enabled automatically during installation for Bash, Zsh, and Fish. Type `phpswitcher` followed by Tab to see available commands, or `phpswitcher use` followed by Tab to see installed PHP versions.
 
 ## Development
 
