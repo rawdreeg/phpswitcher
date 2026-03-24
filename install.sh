@@ -43,10 +43,10 @@ echo "Dependencies found."
 echo_message "Downloading phpswitcher artifact..."
 
 mkdir -p "$INSTALL_DIR"
-TMP_FILE="/tmp/$ARTIFACT_NAME"
+TMP_FILE=$(mktemp "${TMPDIR:-/tmp}/phpswitcher.XXXXXXXXXX.tar.gz")
 
 echo "Downloading from: $ARTIFACT_URL"
-if curl -L --fail --progress-bar -o "$TMP_FILE" "$ARTIFACT_URL"; then
+if curl -L --fail --max-time 120 --progress-bar -o "$TMP_FILE" "$ARTIFACT_URL"; then
     echo "Download successful."
 else
     echo_error "Failed to download artifact from $ARTIFACT_URL"

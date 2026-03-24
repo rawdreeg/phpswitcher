@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -e # Exit on errors
+set -euo pipefail # Exit on errors, unset vars, pipe failures
 
 # --- Configuration ---
 VERSION="0.3.1"

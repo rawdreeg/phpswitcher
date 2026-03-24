@@ -27,7 +27,7 @@ _phpswitcher_auto_switch() {
         fi
 
         # Get the version currently marked as active by phpswitcher.
-        local active_version_file="$HOME/.phpswitcher/active_version"
+        local active_version_file="${PHPSWITCHER_DIR:-$HOME/.phpswitcher}/active_version"
         local current_version=""
         if [ -f "$active_version_file" ]; then
             current_version=$(cat "$active_version_file")
