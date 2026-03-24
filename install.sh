@@ -22,8 +22,6 @@ command_exists() {
 # Define constants for the download
 ARTIFACT_URL="https://github.com/rawdreeg/phpswitcher/releases/latest/download/phpswitcher.tar.gz"
 
-ARTIFACT_NAME="phpswitcher.tar.gz"
-
 # --- Dependency Checks ---
 echo_message "Checking dependencies..."
 
@@ -43,10 +41,10 @@ echo "Dependencies found."
 echo_message "Downloading phpswitcher artifact..."
 
 mkdir -p "$INSTALL_DIR"
-TMP_FILE="/tmp/$ARTIFACT_NAME"
+TMP_FILE=$(mktemp "${TMPDIR:-/tmp}/phpswitcher.XXXXXXXXXX.tar.gz")
 
 echo "Downloading from: $ARTIFACT_URL"
-if curl -L --fail --progress-bar -o "$TMP_FILE" "$ARTIFACT_URL"; then
+if curl -L --fail --max-time 120 --progress-bar -o "$TMP_FILE" "$ARTIFACT_URL"; then
     echo "Download successful."
 else
     echo_error "Failed to download artifact from $ARTIFACT_URL"
@@ -85,7 +83,8 @@ if [ -z "$PROFILE_FILE" ]; then
   echo_error "Could not detect profile file (.bashrc, .bash_profile, or .zshrc)."
   echo "Please add the following lines manually to your shell profile file:"
   printf '\n  export PHPSWITCHER_DIR="%s/.phpswitcher"\n' "$HOME"
-  printf '  export PATH="%s/bin:%s"\n\n' "$INSTALL_DIR" "\$PATH"
+  printf '  export PATH="%s/bin:%s"\n' "$INSTALL_DIR" "\$PATH"
+  printf "  source \"\$PHPSWITCHER_DIR/phpswitcher-init.sh\"\n\n"
   exit 1
 fi
 
@@ -98,6 +97,7 @@ if ! grep -q "PHPSWITCHER_DIR=" "$PROFILE_FILE"; then
     printf "\n# PHP Switcher Configuration\n"
     printf "export PHPSWITCHER_DIR=\"%s\"\n" "$INSTALL_DIR"
     printf "export PATH=\"%s/bin:\$PATH\"\n" "$INSTALL_DIR"
+    printf "source \"\$PHPSWITCHER_DIR/phpswitcher-init.sh\"\n"
   } >> "$PROFILE_FILE"
 else
   echo "phpswitcher already configured in $PROFILE_FILE."

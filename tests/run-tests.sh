@@ -5,6 +5,19 @@
 
 set -uo pipefail # Track unset variables and pipe failures; we handle exit codes manually
 
+# Cleanup test artifacts on exit
+cleanup() {
+    rm -rf test_project 2>/dev/null || true
+}
+trap cleanup EXIT
+
+# --- Setup ---
+# Update Homebrew on macOS to ensure latest formulae (including icu4c@78 for PHP 7.4)
+if [[ "$(uname)" == "Darwin" ]]; then
+    echo "Updating Homebrew formulae database..."
+    brew update
+fi
+
 # --- Test Helpers ---
 # These functions help in asserting test outcomes.
 
@@ -93,8 +106,8 @@ test_use_command() {
     assert_success $? "phpswitcher use 8.1"
 
     test_case "Verify active PHP version is 8.1"
-    # Give the shell a moment to recognize the new version
-    sleep 1
+    # Rehash the shell to pick up the new version immediately
+    hash -r 2>/dev/null || true
     local active_version
     active_version=$(php --version | head -n 1 | grep -o -E '[0-9]+\.[0-9]+' | head -n 1)
     assert_contains "$active_version" "8.1" "php --version reports 8.1"
@@ -120,7 +133,38 @@ test_php_version_file_detection() {
         active_version=$(php --version | head -n 1 | grep -o -E '[0-9]+\.[0-9]+' | head -n 1)
         assert_contains "$active_version" "7.4" "Active version is 7.4 after detection"
     )
-    rm -rf test_project
+}
+
+# Test error handling for invalid version format
+test_invalid_version_format() {
+    test_case "Reject invalid version format"
+    local output
+    output=$(phpswitcher use "abc" 2>&1 || true)
+    assert_contains "$output" "Invalid version format" "Invalid version format is rejected"
+}
+
+# Test that 'version' command works
+test_version_command() {
+    test_case "Version command"
+    local output
+    output=$(phpswitcher version 2>&1)
+    assert_contains "$output" "phpswitcher version" "Version command produces output"
+}
+
+# Test that 'help' command works
+test_help_command() {
+    test_case "Help command"
+    local output
+    output=$(phpswitcher help 2>&1)
+    assert_contains "$output" "Usage:" "Help command shows usage"
+}
+
+# Test running without arguments shows help
+test_no_args() {
+    test_case "No arguments shows help"
+    local output
+    output=$(phpswitcher 2>&1 || true)
+    assert_contains "$output" "Usage:" "No arguments shows usage info"
 }
 
 
@@ -135,6 +179,10 @@ main() {
     test_list_command
     test_use_command
     test_php_version_file_detection
+    test_invalid_version_format
+    test_version_command
+    test_help_command
+    test_no_args
 
     echo "----------------------------------------"
     if [ "$FAIL_COUNT" -eq 0 ]; then
