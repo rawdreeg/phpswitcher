@@ -33,7 +33,7 @@ check_for_updates() {
     local current_version
     current_version=$(cat "$version_file")
     local latest_version
-    latest_version=$(curl -s https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/v//')
+    latest_version=$(curl -s --max-time 10 https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/v//')
 
     if [ -z "$latest_version" ]; then
         return # Could not fetch latest version
@@ -125,14 +125,14 @@ command_list_macos() {
         active_version="${BASH_REMATCH[1]}"
     fi
 
-    for formula in $installed_php_versions; do
+    while IFS= read -r formula; do
         local version=${formula#php@}
         if [ "$version" == "$active_version" ]; then
             echo " * $version (active)"
         else
             echo "   $version"
         fi
-    done
+    done <<< "$installed_php_versions"
 }
 
 command_list_linux() {
@@ -198,19 +198,19 @@ command_self_update() {
 
     # 1. Fetch the latest release artifact URL
     local artifact_url
-    artifact_url=$(curl -s https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'browser_download_url.*phpswitcher\.tar\.gz' | cut -d '"' -f 4)
+    artifact_url=$(curl -s --max-time 10 https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'browser_download_url.*phpswitcher\.tar\.gz' | cut -d '"' -f 4)
 
     if [ -z "$artifact_url" ]; then
         echo_error "Could not find the latest release artifact URL. The update failed."
         exit 1
     fi
 
-    local artifact_name="phpswitcher.tar.gz"
-    local tmp_file="/tmp/$artifact_name"
+    local tmp_file
+    tmp_file=$(mktemp "${TMPDIR:-/tmp}/phpswitcher.XXXXXXXXXX.tar.gz")
 
     # 2. Download the artifact
     echo_message "Downloading the latest version..."
-    if ! curl -L --fail --progress-bar -o "$tmp_file" "$artifact_url"; then
+    if ! curl -L --fail --max-time 120 --progress-bar -o "$tmp_file" "$artifact_url"; then
         echo_error "Failed to download the latest version. Please try again later."
         rm -f "$tmp_file" # Clean up partial download
         exit 1
@@ -262,16 +262,21 @@ command_use_macos() {
 
     # 2. Get all installed PHP versions
     local installed_php_versions
-    installed_php_versions=$(brew list --formula | grep '^php@')
+    installed_php_versions=$(brew list --formula | grep '^php@' || true)
+
+    if [ -z "$installed_php_versions" ]; then
+        echo_error "No PHP versions found installed via Homebrew."
+        exit 1
+    fi
 
     # 3. Unlink all other PHP versions
     echo_message "Unlinking other PHP versions..."
-    for php_version in $installed_php_versions; do
+    while IFS= read -r php_version; do
         if [ "$php_version" != "$target_package" ]; then
             echo " - Unlinking $php_version"
             brew unlink "$php_version" || echo "   - Could not unlink $php_version (maybe already unlinked)."
         fi
-    done
+    done <<< "$installed_php_versions"
 
     # 4. Link the target PHP version
     echo_message "Linking $target_package..."
@@ -489,9 +494,9 @@ command_help() {
     echo ""
     echo "Available commands:"
     echo "  install [<version>]  Install a specific PHP version (e.g., 8.1)."
-    echo "                       If <version> is omitted, it attempts to detect from composer.json."
+    echo "                       If <version> is omitted, it attempts to detect from .php-version or composer.json."
     echo "  use [<version>]      Switch the active PHP version."
-    echo "                       If <version> is omitted, it attempts to detect from composer.json."
+    echo "                       If <version> is omitted, it attempts to detect from .php-version or composer.json."
     echo "  list                 List all installed PHP versions and show the active one."
     echo "  self-update          Update phpswitcher to the latest version."
     echo "  version              Show the currently installed version of phpswitcher."
@@ -550,6 +555,10 @@ main() {
             ;;
         -h|--help|help)
             command_help
+            ;;
+        "")
+            command_help
+            exit 0
             ;;
         *)
             echo_error "Unknown command: $command"
