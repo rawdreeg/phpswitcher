@@ -24,41 +24,25 @@ A simple CLI tool to manage multiple PHP versions on macOS and Linux.
 
 ## Installation
 
-### Homebrew (macOS/Linux)
+### Homebrew (macOS)
 
 ```bash
 brew install rawdreeg/phpswitcher/phpswitcher
 ```
 
-After installation, add the shell integration to your profile:
-
-```bash
-# Bash (~/.bashrc) or Zsh (~/.zshrc):
-source "$(brew --prefix)/share/phpswitcher-init.sh"
-
-# Fish (~/.config/fish/config.fish):
-source "$(brew --prefix)/share/phpswitcher-init.fish"
-```
-
-### Composer (global)
+### Composer
 
 ```bash
 composer global require rawdreeg/phpswitcher
 ```
 
-Make sure your Composer global `bin` directory is in your `PATH` (typically `~/.composer/vendor/bin` or `~/.config/composer/vendor/bin`).
-
-### Install script
+### Install script (macOS & Linux)
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/rawdreeg/phpswitcher/main/install.sh)"
 ```
 
-This will install `phpswitcher` to `$HOME/.phpswitcher` and add it to your shell's profile file (e.g., `.zshrc`, `.bashrc`).
-
----
-
-After installation, open a **new terminal session** or run `source ~/.zshrc` (or the equivalent for your shell) and verify with:
+After installing, restart your terminal and verify with:
 
 ```bash
 phpswitcher help
