@@ -1,0 +1,19 @@
+{
+    "name": "rawdreeg/phpswitcher",
+    "description": "CLI tool to manage and switch between multiple PHP versions",
+    "type": "project",
+    "license": "MIT",
+    "keywords": ["php", "version-manager", "cli"],
+    "authors": [
+        {
+            "name": "Rodrigue",
+            "homepage": "https://github.com/rawdreeg"
+        }
+    ],
+    "homepage": "https://github.com/rawdreeg/phpswitcher",
+    "support": {
+        "issues": "https://github.com/rawdreeg/phpswitcher/issues",
+        "source": "https://github.com/rawdreeg/phpswitcher"
+    },
+    "bin": ["bin/phpswitcher"]
+}
