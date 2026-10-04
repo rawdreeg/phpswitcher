@@ -131,6 +131,19 @@ assert_file_not_exists() {
     fi
 }
 
+assert_equal() {
+    local actual="$1"
+    local expected="$2"
+    local message="$3"
+    if [ "$actual" = "$expected" ]; then
+        report_success "$message"
+    else
+        report_failure "$message"
+        printf '  Expected: %q\n' "$expected"
+        printf '  Actual:   %q\n' "$actual"
+    fi
+}
+
 # =============================================
 # DEFAULT COMMAND TESTS
 # =============================================
@@ -772,6 +785,164 @@ test_checksum_rejects_tampered_archive() {
     )
     assert_failure $? "sha256sum -c rejects the archive"
     teardown
+}
+
+# Minimal GitHub release body. The checksum filename contains the tarball name.
+release_assets_json() {
+    local mode="$1"
+    local artifact="https://github.com/rawdreeg/phpswitcher/releases/download/v0.5.0/phpswitcher.tar.gz"
+    local checksum="${artifact}.sha256"
+
+    case "$mode" in
+        pretty)
+            cat <<EOF
+{
+  "tag_name": "v0.5.0",
+  "assets": [
+    {
+      "name": "phpswitcher.tar.gz",
+      "browser_download_url": "${artifact}"
+    },
+    {
+      "name": "phpswitcher.tar.gz.sha256",
+      "browser_download_url": "${checksum}"
+    }
+  ]
+}
+EOF
+            ;;
+        sha256-first)
+            cat <<EOF
+{
+  "assets": [
+    {
+      "name": "phpswitcher.tar.gz.sha256",
+      "browser_download_url": "${checksum}"
+    },
+    {
+      "name": "phpswitcher.tar.gz",
+      "browser_download_url": "${artifact}"
+    }
+  ]
+}
+EOF
+            ;;
+        compact)
+            printf '%s\n' "{\"assets\":[{\"name\":\"phpswitcher.tar.gz.sha256\",\"browser_download_url\":\"${checksum}\"},{\"name\":\"phpswitcher.tar.gz\",\"browser_download_url\":\"${artifact}\"}]}"
+            ;;
+        crlf)
+            local pretty
+            pretty=$(release_assets_json pretty)
+            printf '%s' "${pretty//$'\n'/$'\r\n'}"
+            ;;
+        trailing-cr)
+            # Carriage return is inside the JSON string, before the closing quote.
+            printf '%s\n' "{\"assets\":[{\"browser_download_url\":\"${artifact}"$'\r'"\"},{\"browser_download_url\":\"${checksum}\"}]}"
+            ;;
+        embedded-newline)
+            printf '%s\n' "{\"browser_download_url\":\"${artifact}"$'\n'"${checksum}\"}"
+            ;;
+        quoted)
+            printf '%s\n' '{"browser_download_url":"\"https://github.com/rawdreeg/phpswitcher/releases/download/v0.5.0/phpswitcher.tar.gz\""}'
+            ;;
+        internal-space)
+            printf '%s\n' '{"browser_download_url":"https://github.com/rawdreeg/phpswitcher/releases/download/v0.5.0/php switcher.tar.gz"}'
+            ;;
+        *)
+            echo "unknown release fixture: $mode" >&2
+            return 1
+            ;;
+    esac
+}
+
+# Print %q of the tarball URL, then %q of the checksum URL.
+source_extract_urls() {
+    local json="$1"
+    (
+        # shellcheck disable=SC1091
+        source "$SCRIPT_DIR/bin/phpswitcher"
+        local artifact="" checksum=""
+        artifact=$(extract_release_asset_url "$json" "phpswitcher.tar.gz" || true)
+        checksum=$(extract_release_asset_url "$json" "phpswitcher.tar.gz.sha256" || true)
+        printf '%q\n' "$artifact"
+        printf '%q\n' "$checksum"
+    )
+}
+
+expect_clean_release_urls() {
+    local json="$1"
+    local label="$2"
+    local expected_artifact="https://github.com/rawdreeg/phpswitcher/releases/download/v0.5.0/phpswitcher.tar.gz"
+    local expected_checksum="${expected_artifact}.sha256"
+    local output artifact_q checksum_q
+    output=$(source_extract_urls "$json")
+    {
+        IFS= read -r artifact_q
+        IFS= read -r checksum_q
+    } <<< "$output"
+    test_case "download url: ${label}"
+    assert_equal "$artifact_q" "$(printf '%q' "$expected_artifact")" "tarball URL is one clean https URL"
+    assert_equal "$checksum_q" "$(printf '%q' "$expected_checksum")" "checksum URL is one clean https URL"
+}
+
+expect_rejected_release_url() {
+    local json="$1"
+    local label="$2"
+    local output artifact_q
+    output=$(source_extract_urls "$json")
+    IFS= read -r artifact_q <<< "$output"
+    test_case "download url: ${label}"
+    assert_equal "$artifact_q" "''" "parser does not return a malformed tarball URL"
+}
+
+test_download_url_unanchored_grep_is_malformed() {
+    local json broken
+    json=$(release_assets_json pretty)
+    # The historical parser. phpswitcher.tar.gz.sha256 also matches this prefix.
+    broken=$(printf '%s\n' "$json" | grep 'browser_download_url.*phpswitcher\.tar\.gz' | cut -d '"' -f 4 || true)
+    test_case "download url: unanchored grep concatenates the checksum asset"
+    case "$broken" in
+        *$'\n'*)
+            report_success "fixture URL contains a newline ($(printf '%q' "$broken"))"
+            ;;
+        *)
+            report_failure "fixture did not reproduce the malformed URL ($(printf '%q' "$broken"))"
+            ;;
+    esac
+}
+
+test_download_url_parser_accepts_release_shapes() {
+    expect_clean_release_urls "$(release_assets_json pretty)" "pretty JSON with both assets"
+    expect_clean_release_urls "$(release_assets_json sha256-first)" "checksum asset listed first"
+    expect_clean_release_urls "$(release_assets_json compact)" "assets array on one line"
+    expect_clean_release_urls "$(release_assets_json crlf)" "CRLF JSON"
+    expect_clean_release_urls "$(release_assets_json trailing-cr)" "trailing CR inside the URL string"
+}
+
+test_download_url_parser_rejects_malformed_values() {
+    expect_rejected_release_url "$(release_assets_json embedded-newline)" "newline inside the URL string"
+    expect_rejected_release_url "$(release_assets_json quoted)" "quotes wrapped around the URL"
+    expect_rejected_release_url "$(release_assets_json internal-space)" "space inside the URL"
+}
+
+test_download_url_clean_check_rejects_bad_strings() {
+    local bad_newline bad_cr bad_quote bad_prefix
+    bad_newline=$'https://github.com/rawdreeg/phpswitcher/releases/download/v0.5.0/phpswitcher.tar.gz\nhttps://github.com/rawdreeg/phpswitcher/releases/download/v0.5.0/phpswitcher.tar.gz.sha256'
+    bad_cr=$'https://github.com/rawdreeg/phpswitcher/releases/download/v0.5.0/phpswitcher.tar.gz\r'
+    bad_quote='https://github.com/rawdreeg/phpswitcher/releases/download/v0.5.0/phpswitcher.tar.gz"'
+    bad_prefix="https://github.com/rawdreeg/phpswitcher/releases/download/v0.5.0/phpswitcher.tar.gz.sha256"
+
+    test_case "download url: clean check rejects newline, CR, quote, and prefix matches"
+    (
+        # shellcheck disable=SC1091
+        source "$SCRIPT_DIR/bin/phpswitcher"
+        is_clean_release_asset_url "$bad_newline" "phpswitcher.tar.gz" && exit 1
+        is_clean_release_asset_url "$bad_cr" "phpswitcher.tar.gz" && exit 1
+        is_clean_release_asset_url "$bad_quote" "phpswitcher.tar.gz" && exit 1
+        is_clean_release_asset_url "$bad_prefix" "phpswitcher.tar.gz" && exit 1
+        is_clean_release_asset_url "https://github.com/rawdreeg/phpswitcher/releases/download/v0.5.0/phpswitcher.tar.gz" "phpswitcher.tar.gz"
+    )
+    assert_success $? "malformed URLs are refused and an exact tarball URL is accepted"
 }
 
 test_release_workflow_updates_versions() {
@@ -2041,6 +2212,10 @@ main() {
     test_checksum_scripts_refuse_without_match
     test_checksum_accepts_matching_archive
     test_checksum_rejects_tampered_archive
+    test_download_url_unanchored_grep_is_malformed
+    test_download_url_parser_accepts_release_shapes
+    test_download_url_parser_rejects_malformed_values
+    test_download_url_clean_check_rejects_bad_strings
     test_release_workflow_updates_versions
 
     # Arch / pacman
