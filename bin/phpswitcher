@@ -1498,23 +1498,97 @@ verify_archive_checksum() {
     return 1
 }
 
+# True when url is a single https GitHub download URL for this exact asset.
+# phpswitcher.tar.gz.sha256 must not satisfy a request for phpswitcher.tar.gz.
+# Newlines, carriage returns, spaces, and quotes are rejected so curl never
+# sees the concatenated assets array (curl exit 3: malformed URL).
+is_clean_release_asset_url() {
+    local url="$1"
+    local asset_name="$2"
+    local prefix rest tag file
+
+    [ -n "$url" ] || return 1
+    [ -n "$asset_name" ] || return 1
+
+    case "$url" in
+        *$'\n'*|*$'\r'*|*[[:space:]]*|*[[:cntrl:]]*|*"'"*|*'"'*)
+            return 1
+            ;;
+    esac
+
+    prefix="https://github.com/rawdreeg/phpswitcher/releases/download/"
+    case "$url" in
+        "$prefix"*) ;;
+        *) return 1 ;;
+    esac
+
+    rest=${url#"$prefix"}
+    case "$rest" in
+        */*) ;;
+        *) return 1 ;;
+    esac
+    tag=${rest%%/*}
+    file=${rest#*/}
+    [ -n "$tag" ] || return 1
+    [ "$file" = "$asset_name" ] || return 1
+    # Release tags look like v0.5.0 or v0.4.0-beta.1, never the asset name.
+    [[ "$tag" =~ ^v[A-Za-z0-9._+-]+$ ]] || return 1
+    return 0
+}
+
+# Print the browser_download_url for asset_name from a GitHub release JSON body.
+# Matches are taken one quoted string at a time, so a checksum asset, a CRLF
+# body, or a one-line assets array cannot be glued onto the tarball URL.
+extract_release_asset_url() {
+    local json="$1"
+    local asset_name="$2"
+    local match url
+
+    [ -n "$json" ] || return 1
+    [ -n "$asset_name" ] || return 1
+
+    while IFS= read -r match; do
+        url=${match#*\"browser_download_url\"}
+        url=${url#*\"}
+        url=${url%\"}
+        # Trim wrapping whitespace and a trailing CR left inside the JSON string.
+        url=${url#"${url%%[![:space:]]*}"}
+        url=${url%"${url##*[![:space:]]}"}
+        if is_clean_release_asset_url "$url" "$asset_name"; then
+            printf '%s\n' "$url"
+            return 0
+        fi
+    done < <(printf '%s\n' "$json" | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"https://[^"]*"' || true)
+
+    return 1
+}
+
 command_self_update() {
     echo_message "Checking for the latest version..."
 
-    # 1. Fetch the latest release artifact URL. Anchor on the closing quote so the
-    # checksum asset (phpswitcher.tar.gz.sha256) is not selected.
-    local artifact_url
-    artifact_url=$(curl -s --max-time 10 https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep -E 'browser_download_url.*/phpswitcher\.tar\.gz"' | head -n 1 | cut -d '"' -f 4)
+    # 1. Fetch each release asset by its exact filename. The checksum asset's
+    # name starts with phpswitcher.tar.gz, so a prefix grep is not enough.
+    local release_json artifact_url checksum_url
+    release_json=$(curl -s --max-time 10 https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest || true)
+    artifact_url=$(extract_release_asset_url "$release_json" "phpswitcher.tar.gz" || true)
+    checksum_url=$(extract_release_asset_url "$release_json" "phpswitcher.tar.gz.sha256" || true)
 
-    if [ -z "$artifact_url" ]; then
+    if ! is_clean_release_asset_url "$artifact_url" "phpswitcher.tar.gz"; then
         echo_error "Could not find the latest release artifact URL. The update failed."
         exit 1
     fi
+    if ! is_clean_release_asset_url "$checksum_url" "phpswitcher.tar.gz.sha256"; then
+        echo_error "Could not find the latest release checksum URL. Refusing to extract."
+        exit 1
+    fi
+    if [ "$checksum_url" != "${artifact_url}.sha256" ]; then
+        echo_error "Could not find the latest release checksum URL. Refusing to extract."
+        exit 1
+    fi
 
-    local tmp_dir tmp_file checksum_url
+    local tmp_dir tmp_file
     tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/phpswitcher.XXXXXXXXXX")
     tmp_file="$tmp_dir/phpswitcher.tar.gz"
-    checksum_url="${artifact_url}.sha256"
 
     # 2. Download the artifact and its checksum. Do not extract until they match.
     echo_message "Downloading the latest version..."
@@ -2450,4 +2524,6 @@ main() {
     esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
