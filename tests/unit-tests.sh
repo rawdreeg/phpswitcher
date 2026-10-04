@@ -8,6 +8,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PHPSWITCHER="$SCRIPT_DIR/bin/phpswitcher"
+ORIGINAL_PATH="$PATH"
 
 # --- Test Helpers ---
 TEST_COUNT=0
@@ -18,6 +19,9 @@ setup() {
     TEST_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/phpswitcher-unit.XXXXXXXX")
     export PHPSWITCHER_DIR="$TEST_TMPDIR"
     export PHPSWITCHER_NO_UPDATE_CHECK=1
+    export PATH="$ORIGINAL_PATH"
+    unset PHPSWITCHER_OS_RELEASE
+    unset PHPSWITCHER_ARCH_BIN_DIR
     mkdir -p "$PHPSWITCHER_DIR"
     echo "0.3.1" > "$PHPSWITCHER_DIR/VERSION"
 }
@@ -986,6 +990,549 @@ test_bash_init_delegates() {
 }
 
 # =============================================
+# ARCH / PACMAN
+# =============================================
+
+write_os_release() {
+    local file="$1"
+    shift
+    printf '%s\n' "$@" > "$file"
+}
+
+arch_fake_dir() {
+    local dir="$TEST_TMPDIR/fakebin"
+    mkdir -p "$dir"
+    printf '%s\n' "$dir"
+}
+
+install_executable() {
+    local path="$1"
+    cat > "$path"
+    chmod +x "$path"
+}
+
+# Records invocations. -n is stripped before the real command runs.
+install_sudo_stub() {
+    local dir="$1"
+    local hang_without_n="${2:-0}"
+    if [ "$hang_without_n" = "1" ]; then
+        install_executable "$dir/sudo" << 'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$PHPSWITCHER_DIR/sudo.log"
+if [ "$1" != "-n" ]; then
+    sleep 30
+    exit 1
+fi
+shift
+exec "$@"
+EOF
+    else
+        install_executable "$dir/sudo" << 'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$PHPSWITCHER_DIR/sudo.log"
+if [ "$1" = "-n" ]; then
+    shift
+fi
+exec "$@"
+EOF
+    fi
+}
+
+install_pacman_stub() {
+    local dir="$1"
+    install_executable "$dir/pacman" << 'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$PHPSWITCHER_DIR/pacman.log"
+cmd=$1
+shift
+case "$cmd" in
+    -Qq)
+        if [ -f "$PHPSWITCHER_DIR/pacman-qq.txt" ]; then
+            cat "$PHPSWITCHER_DIR/pacman-qq.txt"
+        fi
+        exit 0
+        ;;
+    -Q)
+        pkg=$1
+        if [ -f "$PHPSWITCHER_DIR/pacman-q-ok.txt" ] && grep -qxF -- "$pkg" "$PHPSWITCHER_DIR/pacman-q-ok.txt"; then
+            exit 0
+        fi
+        exit 1
+        ;;
+    -R)
+        exit 0
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+EOF
+}
+
+install_helper_stub() {
+    local dir="$1"
+    local name="$2"
+    install_executable "$dir/$name" << 'EOF'
+#!/bin/sh
+printf '%s %s\n' "$(basename "$0")" "$*" >> "$PHPSWITCHER_DIR/helper.log"
+exit 0
+EOF
+}
+
+use_arch_release() {
+    local file="$TEST_TMPDIR/os-release"
+    write_os_release "$file" 'ID="arch"'
+    export PHPSWITCHER_OS_RELEASE="$file"
+}
+
+make_versioned_binary() {
+    local bindir="$1"
+    local name="$2"
+    mkdir -p "$bindir"
+    printf '#!/bin/sh\nprintf "%%s\\n" "%s"\n' "$name" > "$bindir/$name"
+    chmod +x "$bindir/$name"
+}
+
+test_help_mentions_arch() {
+    setup
+    test_case "help: describes Arch AUR packages"
+    local output
+    output=$("$PHPSWITCHER" help 2>&1)
+    assert_contains "$output" "php81-cli" "Help names the CLI subpackage"
+    assert_contains "$output" "/usr/bin/phpXY" "Help names the versioned binary layout"
+    assert_contains "$output" "paru" "Help names paru"
+    assert_contains "$output" "yay" "Help names yay"
+    assert_contains "$output" "update-alternatives" "Help says Arch does not use update-alternatives"
+    teardown
+}
+
+test_debian_use_stays_on_apt_path() {
+    setup
+    test_case "debian use: still targets /usr/bin/phpX.Y"
+    local output
+    output=$("$PHPSWITCHER" use 8.1 2>&1 || true)
+    assert_contains "$output" "/usr/bin/php8.1" "Looks for the Debian binary"
+    assert_not_contains "$output" "/usr/bin/php81" "Does not look for the Arch binary"
+    assert_not_contains "$output" "via pacman" "Does not take the pacman path"
+    teardown
+}
+
+test_debian_ignores_pacman_on_path() {
+    setup
+    local fake
+    fake=$(arch_fake_dir)
+    install_pacman_stub "$fake"
+    write_os_release "$TEST_TMPDIR/os-release" 'ID=ubuntu' 'ID_LIKE=debian'
+    export PHPSWITCHER_OS_RELEASE="$TEST_TMPDIR/os-release"
+    export PATH="$fake:/usr/bin:/bin"
+
+    test_case "debian: pacman on PATH does not replace apt"
+    local output
+    output=$("$PHPSWITCHER" list 2>&1 || true)
+    assert_contains "$output" "update-alternatives" "List stays on update-alternatives"
+    assert_not_contains "$output" "via pacman" "List does not say pacman"
+    assert_file_not_exists "$PHPSWITCHER_DIR/pacman.log" "pacman was not invoked"
+    teardown
+}
+
+test_arch_os_release_selects_pacman() {
+    setup
+    local fake
+    fake=$(arch_fake_dir)
+    install_pacman_stub "$fake"
+    printf '%s\n' php81 php81-cli > "$PHPSWITCHER_DIR/pacman-qq.txt"
+    use_arch_release
+    export PATH="$fake:/usr/bin:/bin"
+
+    test_case "arch: ID=arch lists php81 from pacman"
+    local output
+    output=$("$PHPSWITCHER" list 2>&1 || true)
+    assert_contains "$output" "via pacman" "List uses pacman"
+    assert_contains "$output" "8.1" "Shows 8.1"
+    assert_not_contains "$output" "update-alternatives" "Does not use update-alternatives"
+    teardown
+}
+
+test_arch_id_like_selects_pacman() {
+    setup
+    local fake
+    fake=$(arch_fake_dir)
+    install_pacman_stub "$fake"
+    printf '%s\n' php83-cli > "$PHPSWITCHER_DIR/pacman-qq.txt"
+    write_os_release "$TEST_TMPDIR/os-release" 'ID=manjaro' 'ID_LIKE=arch'
+    export PHPSWITCHER_OS_RELEASE="$TEST_TMPDIR/os-release"
+    export PATH="$fake:/usr/bin:/bin"
+
+    test_case "arch: ID_LIKE=arch selects pacman"
+    local output
+    output=$("$PHPSWITCHER" list 2>&1 || true)
+    assert_contains "$output" "via pacman" "Manjaro uses pacman"
+    assert_contains "$output" "8.3" "Shows 8.3 from php83-cli"
+    teardown
+}
+
+test_arch_pacman_fallback_without_os_release() {
+    setup
+    local fake
+    fake=$(arch_fake_dir)
+    install_pacman_stub "$fake"
+    printf '%s\n' php82 > "$PHPSWITCHER_DIR/pacman-qq.txt"
+    export PHPSWITCHER_OS_RELEASE="$TEST_TMPDIR/missing-os-release"
+    export PATH="$fake:/usr/bin:/bin"
+
+    test_case "arch: pacman is the fallback when os-release is absent"
+    local output
+    output=$("$PHPSWITCHER" list 2>&1 || true)
+    assert_contains "$output" "via pacman" "pacman fallback selects Arch"
+    assert_contains "$output" "8.2" "Shows 8.2 from the php82 package"
+    teardown
+}
+
+test_arch_missing_pacman_is_clear() {
+    setup
+    use_arch_release
+    export PATH="/usr/bin:/bin"
+
+    test_case "arch: missing pacman fails clearly"
+    local output
+    output=$(timeout 5 "$PHPSWITCHER" list 2>&1 || true)
+    assert_contains "$output" "pacman" "Mentions pacman"
+    assert_not_contains "$output" "update-alternatives" "Does not mention update-alternatives"
+    teardown
+}
+
+test_arch_install_rejects_bad_versions() {
+    setup
+    local fake
+    fake=$(arch_fake_dir)
+    install_helper_stub "$fake" paru
+    use_arch_release
+    export PATH="$fake:/usr/bin:/bin"
+
+    test_case "arch install: rejects version and suffix that are not X.Y"
+    local output
+    output=$("$PHPSWITCHER" install 8 2>&1 || true)
+    assert_contains "$output" "Invalid version format" "Rejects 8"
+    assert_file_not_exists "$PHPSWITCHER_DIR/helper.log" "Helper not called for version 8"
+    output=$("$PHPSWITCHER" install 8.10 2>&1 || true)
+    assert_contains "$output" "php81" "Explains the phpXY layout"
+    assert_file_not_exists "$PHPSWITCHER_DIR/helper.log" "Helper not called for 8.10"
+    teardown
+}
+
+test_arch_install_requires_aur_helper() {
+    setup
+    use_arch_release
+    export PATH="/usr/bin:/bin"
+
+    test_case "arch install: fails when paru and yay are missing"
+    local output
+    output=$("$PHPSWITCHER" install 8.1 2>&1 || true)
+    assert_contains "$output" "pacman cannot install AUR packages" "Explains the pacman limitation"
+    assert_contains "$output" "paru" "Names paru"
+    assert_contains "$output" "yay" "Names yay"
+    assert_contains "$output" "php81" "Names the base package"
+    assert_contains "$output" "php81-cli" "Names the CLI package"
+    teardown
+}
+
+test_arch_helper_prefers_paru() {
+    setup
+    local fake bindir
+    fake=$(arch_fake_dir)
+    bindir="$TEST_TMPDIR/usrbin"
+    install_helper_stub "$fake" paru
+    install_helper_stub "$fake" yay
+    install_sudo_stub "$fake" 0
+    make_versioned_binary "$bindir" php81
+    use_arch_release
+    export PHPSWITCHER_ARCH_BIN_DIR="$bindir"
+    export PATH="$fake:/usr/bin:/bin"
+
+    test_case "arch install: uses paru when both helpers exist"
+    "$PHPSWITCHER" install 8.1 --quiet >/dev/null 2>&1 || true
+    local log
+    log=$(cat "$PHPSWITCHER_DIR/helper.log")
+    assert_contains "$log" "paru -S --needed --noconfirm php81 php81-cli" "paru installs both packages"
+    assert_not_contains "$log" "yay " "yay is not selected"
+    teardown
+}
+
+test_arch_install_package_names() {
+    setup
+    local fake bindir
+    fake=$(arch_fake_dir)
+    bindir="$TEST_TMPDIR/usrbin"
+    install_helper_stub "$fake" yay
+    make_versioned_binary "$bindir" php82
+    make_versioned_binary "$bindir" phpize82
+    use_arch_release
+    export PHPSWITCHER_ARCH_BIN_DIR="$bindir"
+    export PATH="$fake:/usr/bin:/bin"
+
+    test_case "arch install: yay installs php82 and php82-cli, then switches"
+    local output
+    output=$("$PHPSWITCHER" install 8.2 2>&1 || true)
+    local log
+    log=$(cat "$PHPSWITCHER_DIR/helper.log")
+    assert_contains "$log" "yay -S --needed --noconfirm php82 php82-cli" "yay command uses the AUR names"
+    assert_not_contains "$log" "php8.2" "Does not use the Debian package name"
+    assert_not_contains "$log" "--sudoflags=-n" "Interactive install does not force sudo -n"
+    assert_file_not_exists "$PHPSWITCHER_DIR/sudo.log" "Switching does not call sudo"
+    local target
+    target=$(readlink "$PHPSWITCHER_DIR/bin/php")
+    assert_contains "$target" "$bindir/php82" "Switch links php to php82"
+    assert_contains "$output" "php82-cli" "Output names the CLI package"
+    teardown
+}
+
+test_arch_install_quiet_does_not_prompt() {
+    setup
+    local fake bindir
+    fake=$(arch_fake_dir)
+    bindir="$TEST_TMPDIR/usrbin"
+    install_helper_stub "$fake" paru
+    install_sudo_stub "$fake" 1
+    make_versioned_binary "$bindir" php81
+    use_arch_release
+    export PHPSWITCHER_ARCH_BIN_DIR="$bindir"
+    export PATH="$fake:/usr/bin:/bin"
+
+    test_case "arch install --quiet: sudo -n, no password wait"
+    local output
+    output=$(timeout 5 "$PHPSWITCHER" install 8.1 --quiet 2>&1)
+    assert_success $? "quiet install finishes without a password prompt"
+    local helper sudo_log
+    helper=$(cat "$PHPSWITCHER_DIR/helper.log")
+    sudo_log=$(cat "$PHPSWITCHER_DIR/sudo.log")
+    assert_contains "$helper" "--sudoflags=-n" "Helper is told not to prompt"
+    assert_contains "$helper" "php81 php81-cli" "Quiet install still selects both packages"
+    assert_contains "$sudo_log" "-n true" "Privilege check uses sudo -n"
+    teardown
+}
+
+test_arch_use_links_versioned_binaries() {
+    setup
+    local bindir="$TEST_TMPDIR/usrbin"
+    local tool
+    for tool in php81 phpize81 php-config81 phar81 phar.phar81 php-fpm81; do
+        make_versioned_binary "$bindir" "$tool"
+    done
+    # phpdbg81 is absent, so a stale symlink from another version must be removed.
+    mkdir -p "$PHPSWITCHER_DIR/bin"
+    ln -s "$bindir/phpdbg83" "$PHPSWITCHER_DIR/bin/phpdbg"
+    use_arch_release
+    export PHPSWITCHER_ARCH_BIN_DIR="$bindir"
+
+    test_case "arch use: symlinks versioned binaries into PHPSWITCHER_DIR/bin"
+    local output
+    output=$("$PHPSWITCHER" use 8.1 --quiet 2>&1)
+    assert_success $? "use 8.1 exits successfully"
+    assert_file_contents "$PHPSWITCHER_DIR/active_version" "8.1" "active_version is 8.1"
+    local name target
+    for name in php phpize php-config phar phar.phar php-fpm; do
+        target=$(readlink "$PHPSWITCHER_DIR/bin/$name")
+        assert_contains "$target" "$bindir/${name}81" "$name points at the 8.1 binary"
+    done
+    if [ -L "$PHPSWITCHER_DIR/bin/phpdbg" ]; then
+        report_failure "Stale phpdbg symlink is removed"
+    else
+        report_success "Stale phpdbg symlink is removed"
+    fi
+    assert_not_contains "$output" "update-alternatives" "Does not mention update-alternatives"
+    assert_not_contains "$output" "password" "Does not mention a password"
+    teardown
+}
+
+test_arch_use_missing_binary() {
+    setup
+    local fake bindir
+    fake=$(arch_fake_dir)
+    bindir="$TEST_TMPDIR/usrbin"
+    mkdir -p "$bindir"
+    install_sudo_stub "$fake" 1
+    use_arch_release
+    export PHPSWITCHER_ARCH_BIN_DIR="$bindir"
+    export PATH="$fake:/usr/bin:/bin"
+
+    test_case "arch use: missing binary fails and names php82"
+    local output
+    output=$(timeout 5 "$PHPSWITCHER" use 8.2 --quiet 2>&1 || true)
+    assert_contains "$output" "$bindir/php82" "Names the missing CLI binary"
+    assert_contains "$output" "php82-cli" "Names the package that provides it"
+    assert_not_contains "$output" "php8.2" "Does not use the Debian binary name"
+    assert_not_contains "$output" "update-alternatives" "Does not fall back to alternatives"
+    assert_file_not_exists "$PHPSWITCHER_DIR/sudo.log" "Does not call sudo when the binary is missing"
+    teardown
+}
+
+test_arch_use_quiet_does_not_call_sudo() {
+    setup
+    local fake bindir
+    fake=$(arch_fake_dir)
+    bindir="$TEST_TMPDIR/usrbin"
+    install_sudo_stub "$fake" 1
+    make_versioned_binary "$bindir" php81
+    use_arch_release
+    export PHPSWITCHER_ARCH_BIN_DIR="$bindir"
+    export PATH="$fake:/usr/bin:/bin"
+
+    test_case "arch use --quiet: does not invoke sudo"
+    timeout 5 "$PHPSWITCHER" use 8.1 --quiet >/dev/null 2>&1
+    assert_success $? "quiet use returns before any password prompt"
+    assert_file_not_exists "$PHPSWITCHER_DIR/sudo.log" "sudo was not invoked"
+    local target
+    target=$(readlink "$PHPSWITCHER_DIR/bin/php")
+    assert_contains "$target" "$bindir/php81" "php symlink was still created"
+    teardown
+}
+
+test_arch_list_marks_active_and_skips_extension_packages() {
+    setup
+    local fake bindir
+    fake=$(arch_fake_dir)
+    bindir="$TEST_TMPDIR/usrbin"
+    install_pacman_stub "$fake"
+    printf '%s\n' php81 php81-cli php82-cli php83-curl > "$PHPSWITCHER_DIR/pacman-qq.txt"
+    make_versioned_binary "$bindir" php84
+    mkdir -p "$PHPSWITCHER_DIR/bin"
+    ln -s "$bindir/php82" "$PHPSWITCHER_DIR/bin/php"
+    use_arch_release
+    export PHPSWITCHER_ARCH_BIN_DIR="$bindir"
+    export PATH="$fake:/usr/bin:/bin"
+
+    test_case "arch list: marks the linked version and ignores extension-only packages"
+    local output
+    output=$("$PHPSWITCHER" list 2>&1 || true)
+    assert_contains "$output" "* 8.2 (active)" "8.2 is active via the php symlink"
+    assert_contains "$output" "8.1" "8.1 is listed from php81"
+    assert_contains "$output" "8.4" "8.4 is listed from the versioned binary"
+    assert_not_contains "$output" "8.3" "php83-curl is not a PHP version"
+    teardown
+}
+
+test_arch_uninstall_refuses_active() {
+    setup
+    local fake bindir
+    fake=$(arch_fake_dir)
+    bindir="$TEST_TMPDIR/usrbin"
+    install_pacman_stub "$fake"
+    install_sudo_stub "$fake" 1
+    printf '%s\n' php81 php81-cli > "$PHPSWITCHER_DIR/pacman-qq.txt"
+    printf '%s\n' php81 php81-cli > "$PHPSWITCHER_DIR/pacman-q-ok.txt"
+    make_versioned_binary "$bindir" php81
+    mkdir -p "$PHPSWITCHER_DIR/bin"
+    ln -s "$bindir/php81" "$PHPSWITCHER_DIR/bin/php"
+    use_arch_release
+    export PHPSWITCHER_ARCH_BIN_DIR="$bindir"
+    export PATH="$fake:/usr/bin:/bin"
+
+    test_case "arch uninstall: refuses the active version without calling pacman -R"
+    local output
+    output=$(timeout 5 "$PHPSWITCHER" uninstall 8.1 --quiet 2>&1 || true)
+    assert_contains "$output" "currently active" "Refuses the active version"
+    if [ -f "$PHPSWITCHER_DIR/pacman.log" ]; then
+        assert_not_contains "$(cat "$PHPSWITCHER_DIR/pacman.log")" "-R" "Does not remove packages"
+    else
+        report_success "Does not remove packages"
+    fi
+    assert_file_not_exists "$PHPSWITCHER_DIR/sudo.log" "Does not call sudo"
+    teardown
+}
+
+test_arch_uninstall_package_names() {
+    setup
+    local fake bindir
+    fake=$(arch_fake_dir)
+    bindir="$TEST_TMPDIR/usrbin"
+    install_pacman_stub "$fake"
+    install_sudo_stub "$fake" 0
+    printf '%s\n' php81 php81-cli php82 php82-cli php82-curl php83-curl > "$PHPSWITCHER_DIR/pacman-qq.txt"
+    printf '%s\n' php82 php82-cli > "$PHPSWITCHER_DIR/pacman-q-ok.txt"
+    make_versioned_binary "$bindir" php81
+    mkdir -p "$PHPSWITCHER_DIR/bin"
+    ln -s "$bindir/php81" "$PHPSWITCHER_DIR/bin/php"
+    ln -s "$bindir/php82" "$PHPSWITCHER_DIR/bin/php-fpm"
+    use_arch_release
+    export PHPSWITCHER_ARCH_BIN_DIR="$bindir"
+    export PATH="$fake:/usr/bin:/bin"
+
+    test_case "arch uninstall: pacman -R removes php82 and php82-* only"
+    local output
+    output=$(timeout 5 "$PHPSWITCHER" uninstall 8.2 --quiet 2>&1)
+    assert_success $? "quiet uninstall exits successfully"
+    local pacman_log sudo_log
+    pacman_log=$(cat "$PHPSWITCHER_DIR/pacman.log")
+    sudo_log=$(cat "$PHPSWITCHER_DIR/sudo.log")
+    assert_contains "$pacman_log" "-R --noconfirm php82 php82-cli php82-curl" "Removes the version and its subpackages"
+    assert_not_contains "$pacman_log" "php81" "Does not remove php81"
+    assert_not_contains "$pacman_log" "php83-curl" "Does not remove another version's extension"
+    assert_contains "$sudo_log" "-n pacman -R --noconfirm php82 php82-cli php82-curl" "Quiet removal uses sudo -n"
+    assert_not_contains "$output" "password" "Quiet removal does not mention a password prompt"
+    teardown
+}
+
+test_arch_extension_names() {
+    setup
+    local fake
+    fake=$(arch_fake_dir)
+    install_helper_stub "$fake" paru
+    install_pacman_stub "$fake"
+    install_sudo_stub "$fake" 0
+    printf '%s\n' php81-xdebug > "$PHPSWITCHER_DIR/pacman-q-ok.txt"
+    use_arch_release
+    export PATH="$fake:/usr/bin:/bin"
+
+    test_case "arch extensions: package names and rejected names"
+    local output
+    output=$("$PHPSWITCHER" extensions install '../evil' 8.1 2>&1 || true)
+    assert_contains "$output" "Invalid extension name" "Rejects a path-like extension"
+    assert_file_not_exists "$PHPSWITCHER_DIR/helper.log" "Rejected name is not passed to the helper"
+
+    output=$("$PHPSWITCHER" extensions install xdebug 8.1 2>&1 || true)
+    local helper
+    helper=$(cat "$PHPSWITCHER_DIR/helper.log")
+    assert_contains "$helper" "paru -S --needed --noconfirm php81-xdebug" "Installs php81-xdebug"
+    assert_not_contains "$helper" "php8.1-xdebug" "Does not use the apt package name"
+
+    : > "$PHPSWITCHER_DIR/helper.log"
+    output=$("$PHPSWITCHER" extensions install 'xdebug;rm' 8.3 2>&1 || true)
+    assert_contains "$output" "Invalid extension name" "Rejects a metacharacter"
+    assert_file_contents "$PHPSWITCHER_DIR/helper.log" "" "Metacharacter name does not reach the helper"
+
+    output=$(timeout 5 "$PHPSWITCHER" extensions uninstall xdebug 8.1 --quiet 2>&1)
+    assert_success $? "quiet extension removal exits successfully"
+    local pacman_log sudo_log
+    pacman_log=$(cat "$PHPSWITCHER_DIR/pacman.log")
+    sudo_log=$(cat "$PHPSWITCHER_DIR/sudo.log")
+    assert_contains "$pacman_log" "-R --noconfirm php81-xdebug" "Removes php81-xdebug with pacman"
+    assert_contains "$sudo_log" "-n pacman -R --noconfirm php81-xdebug" "Quiet removal uses sudo -n"
+
+    output=$("$PHPSWITCHER" extensions install curl 8.10 2>&1 || true)
+    assert_contains "$output" "phpXY" "Rejects a suffix that is not two digits"
+    teardown
+}
+
+test_arch_extension_list_uses_versioned_binary() {
+    setup
+    local bindir="$TEST_TMPDIR/usrbin"
+    mkdir -p "$bindir"
+    install_executable "$bindir/php81" << 'EOF'
+#!/bin/sh
+printf '%s\n' '[PHP Modules]' xdebug
+EOF
+    use_arch_release
+    export PHPSWITCHER_ARCH_BIN_DIR="$bindir"
+
+    test_case "arch extensions list: runs /usr/bin/php81, not php8.1"
+    local output
+    output=$("$PHPSWITCHER" extensions 8.1 2>&1 || true)
+    assert_contains "$output" "xdebug" "Lists the extension from the versioned binary"
+    assert_not_contains "$output" "/usr/bin/php8.1" "Does not look up the Debian path"
+    teardown
+}
+
+# =============================================
 # MAIN RUNNER
 # =============================================
 
@@ -1072,6 +1619,28 @@ main() {
     test_checksum_accepts_matching_archive
     test_checksum_rejects_tampered_archive
     test_release_workflow_updates_versions
+
+    # Arch / pacman
+    test_help_mentions_arch
+    test_debian_use_stays_on_apt_path
+    test_debian_ignores_pacman_on_path
+    test_arch_os_release_selects_pacman
+    test_arch_id_like_selects_pacman
+    test_arch_pacman_fallback_without_os_release
+    test_arch_missing_pacman_is_clear
+    test_arch_install_rejects_bad_versions
+    test_arch_install_requires_aur_helper
+    test_arch_helper_prefers_paru
+    test_arch_install_package_names
+    test_arch_install_quiet_does_not_prompt
+    test_arch_use_links_versioned_binaries
+    test_arch_use_missing_binary
+    test_arch_use_quiet_does_not_call_sudo
+    test_arch_list_marks_active_and_skips_extension_packages
+    test_arch_uninstall_refuses_active
+    test_arch_uninstall_package_names
+    test_arch_extension_names
+    test_arch_extension_list_uses_versioned_binary
 
     # Shell integration
     test_status_shell_integration_missing
