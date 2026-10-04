@@ -29,21 +29,24 @@ if [ -n "$BASH_VERSION" ]; then
             return
         fi
 
+        # extensions: offer subcommands before version names. The version case
+        # used to match "extensions" and return before this could run.
+        if [ "${COMP_WORDS[1]}" = "extensions" ] && [ "$COMP_CWORD" -eq 2 ]; then
+            local versions
+            versions=$(_phpswitcher_installed_versions)
+            COMPREPLY=( $(compgen -W "list install $versions" -- "$cur") )
+            return
+        fi
+
         # Complete versions for commands that accept a version argument
         case "$prev" in
-            install|uninstall|use|default|extensions)
+            install|uninstall|use|default)
                 local versions
                 versions=$(_phpswitcher_installed_versions)
                 COMPREPLY=( $(compgen -W "$versions" -- "$cur") )
                 return
                 ;;
         esac
-
-        # Complete subcommands for extensions
-        if [ "${COMP_WORDS[1]}" = "extensions" ] && [ "$COMP_CWORD" -eq 2 ]; then
-            COMPREPLY=( $(compgen -W "list install" -- "$cur") )
-            return
-        fi
     }
 
     complete -F _phpswitcher_bash_complete phpswitcher
@@ -77,8 +80,20 @@ if [ -n "$ZSH_VERSION" ]; then
                 ;;
             argument)
                 case "${words[2]}" in
-                    install|uninstall|use|default|extensions)
+                    install|uninstall|use|default)
                         local -a versions
+                        versions=( ${(f)"$(_phpswitcher_installed_versions)"} )
+                        if [ ${#versions[@]} -gt 0 ]; then
+                            _describe 'PHP version' versions
+                        fi
+                        ;;
+                    extensions)
+                        local -a subcommands versions
+                        subcommands=(
+                            'list:List installed extensions'
+                            'install:Install an extension'
+                        )
+                        _describe 'subcommand' subcommands
                         versions=( ${(f)"$(_phpswitcher_installed_versions)"} )
                         if [ ${#versions[@]} -gt 0 ]; then
                             _describe 'PHP version' versions

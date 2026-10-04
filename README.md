@@ -65,7 +65,7 @@ phpswitcher list
 
 **Install a PHP version:**
 
-If you are in a directory containing a `composer.json` file with a PHP requirement, you can omit the `<version>` argument to automatically detect and install the required `X.Y` version.
+If a `composer.json` in this directory or a parent has a PHP requirement (`config.platform.php`, then `require.php`), you can omit the `<version>` argument to automatically detect and install the required `X.Y` version.
 
 ```bash
 phpswitcher install [<version>]
@@ -73,7 +73,7 @@ phpswitcher install [<version>]
 phpswitcher install 8.1
 phpswitcher install 7.4
 
-# Auto-detect from composer.json in current directory:
+# Auto-detect from composer.json in this directory or a parent:
 cd my-project-using-php8.0/
 phpswitcher install
 ```
@@ -90,14 +90,14 @@ phpswitcher uninstall 7.4
 
 **Switch active PHP version:**
 
-If you are in a directory containing a `composer.json` file with a PHP requirement (`require.php` or `config.platform.php`), you can omit the `<version>` argument, and `phpswitcher` will attempt to detect and use the appropriate `X.Y` version.
+If you are in a directory containing a `composer.json` file with a PHP requirement (`config.platform.php`, then `require.php`), you can omit the `<version>` argument, and `phpswitcher` will attempt to detect and use the appropriate `X.Y` version. The search walks parent directories, the same way `.php-version` does.
 
 ```bash
 phpswitcher use [<version>]
 # Examples:
 phpswitcher use 8.1
 
-# Auto-detect from composer.json in current directory:
+# Auto-detect from composer.json in this directory or a parent:
 cd my-project-using-php7.4/
 phpswitcher use
 ```
@@ -137,6 +137,9 @@ phpswitcher status
 #   Source:           .php-version (/home/user/project/.php-version)
 #
 # Global default:     8.2
+#
+# Shell integration:  /home/user/.bashrc
+#   enabled
 ```
 
 **Manage PHP extensions:**
@@ -185,9 +188,13 @@ php --version
 ### How it Works
 
 1.  When you `cd` into a new directory, `phpswitcher` looks for a `.php-version` file in the current directory or any parent directory.
-2.  If no `.php-version` file is found, it checks for a `composer.json` in the current directory and reads the PHP version constraint.
+2.  If no `.php-version` file is found, it walks parent directories for a `composer.json` and reads `config.platform.php`, then `require.php`.
 3.  If neither is found, it falls back to the global default version (if set via `phpswitcher default`).
 4.  If a required version is detected and it differs from the currently active version, `phpswitcher` automatically switches to it.
+
+The shell hook asks `phpswitcher status` for that decision, so Bash, Zsh, and Fish stay on the same detection rules as `phpswitcher use`.
+
+Re-running the installer adds the hook if an older install only put `phpswitcher` on your `PATH`. `phpswitcher status` reports whether the hook is present.
 
 ### Usage
 
