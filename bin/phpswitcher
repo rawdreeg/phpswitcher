@@ -127,6 +127,77 @@ detect_os() {
     esac
 }
 
+# Single Linux family check. Bash, Zsh, and Fish hooks call this CLI
+# (status / use), so they cannot grow a second Fedora-vs-Debian decision.
+os_release_file() {
+    printf '%s\n' "${PHPSWITCHER_OS_RELEASE:-/etc/os-release}"
+}
+
+# Print one unquoted os-release value. Returns 1 when the key is absent.
+os_release_value() {
+    local file="$1"
+    local key="$2"
+    local line value
+
+    [ -r "$file" ] || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            \#*|"")
+                continue
+                ;;
+            "${key}="*)
+                value=${line#*=}
+                value=${value#\"}
+                value=${value%\"}
+                value=${value#\'}
+                value=${value%\'}
+                printf '%s\n' "$value"
+                return 0
+                ;;
+        esac
+    done < "$file"
+    return 1
+}
+
+# Print "fedora" or "debian".
+# Fedora is ID=fedora, or dnf on a system that is not already Debian-family.
+# Debian and Ubuntu stay on apt. Other Enterprise Linux IDs keep that apt path.
+detect_linux_family() {
+    local file id id_like
+    file=$(os_release_file)
+    id=$(os_release_value "$file" ID || true)
+    id_like=$(os_release_value "$file" ID_LIKE || true)
+
+    case "$id" in
+        fedora)
+            printf 'fedora\n'
+            return 0
+            ;;
+        debian|ubuntu|linuxmint|pop|raspbian|kali|rhel|centos|ol|almalinux|rocky|amzn)
+            printf 'debian\n'
+            return 0
+            ;;
+    esac
+
+    case " ${id_like} " in
+        *" debian "*|*" ubuntu "*)
+            printf 'debian\n'
+            return 0
+            ;;
+    esac
+
+    if command -v dnf >/dev/null 2>&1 && ! command -v apt-get >/dev/null 2>&1; then
+        printf 'fedora\n'
+        return 0
+    fi
+
+    printf 'debian\n'
+}
+
+linux_is_fedora() {
+    [ "$(detect_linux_family)" = "fedora" ]
+}
+
 # --- Version Detection ---
 
 # Print "X.Y<TAB>platform|require" from a composer.json, preferring config.platform.php.
@@ -229,6 +300,590 @@ detect_version() {
 
 # --- Command Implementations ---
 
+# Remi Software Collections (remi-safe), the side-by-side Fedora layout:
+#   dnf install https://rpms.remirepo.net/fedora/remi-release-<VERSION_ID>.rpm
+#   dnf install php82 php82-php-cli
+#   /usr/bin/php82                         wrapper (php82-php-cli)
+#   /usr/bin/php82-phar                    phar wrapper
+#   /opt/remi/php82/root/usr/bin/php       CLI binary
+#   /opt/remi/php82/root/usr/bin/phar
+#   /opt/remi/php82/root/usr/bin/phar.phar
+#   /opt/remi/php82/root/usr/bin/phpize    also /usr/bin/php82-phpize from php82-php-devel
+#   /opt/remi/php82/root/usr/bin/php-config
+#   /usr/bin/php82-phpdbg and /opt/remi/php82/root/usr/bin/phpdbg
+#   /opt/remi/php82/root/usr/sbin/php-fpm  (service php82-php-fpm)
+#   extensions: php82-php-<name>, PECL php82-php-pecl-<name>
+# A dnf module stream (php:remi-8.2) replaces the single system php package.
+# phpswitcher installs the parallel SCL packages instead.
+# Tests set PHPSWITCHER_FEDORA_ROOT to a fixture tree and PHPSWITCHER_OS_RELEASE
+# to a fake os-release file. Both are empty / the real file in normal use.
+
+fedora_root() {
+    printf '%s\n' "${PHPSWITCHER_FEDORA_ROOT:-}"
+}
+
+# 8.1 -> php81, 7.4 -> php74, 5.6 -> php56. Remi SCL names drop the dot.
+fedora_scl_name() {
+    local version="$1"
+    printf 'php%s\n' "${version//./}"
+}
+
+fedora_require_dnf() {
+    if ! command -v dnf >/dev/null 2>&1; then
+        echo_error "The 'dnf' command is not available. Fedora support installs PHP with dnf from the Remi repository."
+        exit 1
+    fi
+}
+
+fedora_require_sudo() {
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo_error "sudo is required to install and remove PHP packages with dnf."
+        exit 1
+    fi
+}
+
+# Print the first executable Remi binary for this tool, or return 1.
+fedora_resolve_tool() {
+    local version="$1"
+    local tool="$2"
+    local scl root candidate
+    local -a candidates
+    scl=$(fedora_scl_name "$version")
+    root=$(fedora_root)
+    candidates=()
+
+    case "$tool" in
+        php)
+            candidates=(
+                "${root}/usr/bin/${scl}"
+                "${root}/opt/remi/${scl}/root/usr/bin/php"
+            )
+            ;;
+        phar)
+            candidates=(
+                "${root}/usr/bin/${scl}-phar"
+                "${root}/opt/remi/${scl}/root/usr/bin/phar"
+            )
+            ;;
+        phar.phar)
+            candidates=(
+                "${root}/opt/remi/${scl}/root/usr/bin/phar.phar"
+            )
+            ;;
+        phpize)
+            candidates=(
+                "${root}/usr/bin/${scl}-phpize"
+                "${root}/opt/remi/${scl}/root/usr/bin/phpize"
+            )
+            ;;
+        php-config)
+            candidates=(
+                "${root}/usr/bin/${scl}-php-config"
+                "${root}/opt/remi/${scl}/root/usr/bin/php-config"
+            )
+            ;;
+        phpdbg)
+            candidates=(
+                "${root}/usr/bin/${scl}-phpdbg"
+                "${root}/opt/remi/${scl}/root/usr/bin/phpdbg"
+            )
+            ;;
+        php-fpm)
+            candidates=(
+                "${root}/opt/remi/${scl}/root/usr/sbin/php-fpm"
+                "${root}/usr/bin/${scl}-php-fpm"
+            )
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    for candidate in "${candidates[@]}"; do
+        if [ -x "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+fedora_missing_php_message() {
+    local version="$1"
+    local scl root
+    scl=$(fedora_scl_name "$version")
+    root=$(fedora_root)
+    echo "Looked for ${root}/usr/bin/${scl} and ${root}/opt/remi/${scl}/root/usr/bin/php."
+}
+
+# 8.2 from /usr/bin/php82 or /opt/remi/php82/root/usr/bin/php.
+fedora_version_from_path() {
+    local path="$1"
+    if [[ "$path" =~ /php([0-9])([0-9])(/|$) ]]; then
+        printf '%s.%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+        return 0
+    fi
+    return 1
+}
+
+linux_alternatives_cmd() {
+    if command -v update-alternatives >/dev/null 2>&1; then
+        printf 'update-alternatives\n'
+        return 0
+    fi
+    if command -v alternatives >/dev/null 2>&1; then
+        printf 'alternatives\n'
+        return 0
+    fi
+    return 1
+}
+
+# Return 0 when $target is already registered for the alternatives name.
+alternative_provides() {
+    local name="$1"
+    local target="$2"
+    local cmd listed
+    cmd=$(linux_alternatives_cmd) || return 1
+
+    if [ "$cmd" = "update-alternatives" ]; then
+        listed=$("$cmd" --list "$name" 2>/dev/null || true)
+        [ -n "$listed" ] || return 1
+        if printf '%s\n' "$listed" | grep -qxF -- "$target"; then
+            return 0
+        fi
+        return 1
+    fi
+
+    listed=$("$cmd" --display "$name" 2>/dev/null || true)
+    [ -n "$listed" ] || return 1
+    if printf '%s\n' "$listed" | grep -F -- "$target" >/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+# Set an alternatives slave only when it is already registered.
+# Quiet mode uses sudo -n so a password prompt cannot block.
+# Returns 1 when alternatives are not used; the caller then writes a symlink.
+fedora_set_alternative_if_registered() {
+    local name="$1"
+    local target="$2"
+    local cmd
+    cmd=$(linux_alternatives_cmd) || return 1
+    if ! alternative_provides "$name" "$target"; then
+        return 1
+    fi
+    if [ "${PHPSWITCHER_QUIET:-}" = "true" ]; then
+        sudo -n "$cmd" --set "$name" "$target" >/dev/null 2>&1 || return 1
+    else
+        sudo "$cmd" --set "$name" "$target" || return 1
+    fi
+    return 0
+}
+
+fedora_installed_versions() {
+    local root path base digits
+    root=$(fedora_root)
+    {
+        for path in "${root}"/usr/bin/php[0-9][0-9]; do
+            [ -x "$path" ] || continue
+            base=$(basename "$path")
+            digits=${base#php}
+            if [[ "$digits" =~ ^[0-9]{2}$ ]]; then
+                printf '%s.%s\n' "${digits:0:1}" "${digits:1:1}"
+            fi
+        done
+        for path in "${root}"/opt/remi/php[0-9][0-9]/root/usr/bin/php; do
+            [ -x "$path" ] || continue
+            if [[ "$path" =~ /php([0-9])([0-9])/root/usr/bin/php$ ]]; then
+                printf '%s.%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+            fi
+        done
+    } | sort -u -V
+}
+
+fedora_current_version() {
+    local resolved cmd
+    if [ -e "${PHPSWITCHER_DIR}/bin/php" ]; then
+        resolved=$(readlink -f "${PHPSWITCHER_DIR}/bin/php" 2>/dev/null || true)
+        if [ -z "$resolved" ]; then
+            resolved=$(readlink "${PHPSWITCHER_DIR}/bin/php" 2>/dev/null || true)
+        fi
+        if [ -n "$resolved" ] && fedora_version_from_path "$resolved" >/dev/null; then
+            fedora_version_from_path "$resolved"
+            return 0
+        fi
+    fi
+
+    if cmd=$(linux_alternatives_cmd); then
+        resolved=""
+        if [ "$cmd" = "update-alternatives" ]; then
+            resolved=$("$cmd" --query php 2>/dev/null | sed -n 's/^Value: //p' | head -n 1 || true)
+        else
+            resolved=$("$cmd" --display php 2>/dev/null | sed -n 's/^ link currently points to //p' | head -n 1 || true)
+        fi
+        if [ -n "$resolved" ] && fedora_version_from_path "$resolved" >/dev/null; then
+            fedora_version_from_path "$resolved"
+            return 0
+        fi
+    fi
+
+    if [ -f "${PHPSWITCHER_DIR}/active_version" ]; then
+        tr -d '[:space:]' < "${PHPSWITCHER_DIR}/active_version"
+        return 0
+    fi
+    return 1
+}
+
+fedora_php_present() {
+    local version="$1"
+    local scl
+    scl=$(fedora_scl_name "$version")
+    if fedora_resolve_tool "$version" php >/dev/null; then
+        return 0
+    fi
+    if command -v rpm >/dev/null 2>&1 && rpm -q "$scl" >/dev/null 2>&1; then
+        return 0
+    fi
+    if command -v rpm >/dev/null 2>&1 && rpm -q "${scl}-php-cli" >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+fedora_link_tool() {
+    local version="$1"
+    local tool="$2"
+    local dest="$3"
+    local tool_bin
+    tool_bin=$(fedora_resolve_tool "$version" "$tool" || true)
+    if [ -z "$tool_bin" ]; then
+        rm -f "${dest}/${tool}"
+        return 0
+    fi
+    if fedora_set_alternative_if_registered "$tool" "$tool_bin"; then
+        rm -f "${dest}/${tool}"
+        return 0
+    fi
+    ln -sfn "$tool_bin" "${dest}/${tool}"
+}
+
+fedora_switch_to() {
+    local version="$1"
+    local php_bin dest
+    php_bin=$(fedora_resolve_tool "$version" php || true)
+    if [ -z "$php_bin" ]; then
+        echo_error "PHP ${version} is not installed."
+        fedora_missing_php_message "$version"
+        echo "Install it with: phpswitcher install ${version}"
+        exit 1
+    fi
+
+    dest="${PHPSWITCHER_DIR}/bin"
+    mkdir -p "$dest"
+
+    if fedora_set_alternative_if_registered php "$php_bin"; then
+        rm -f "${dest}/php"
+    else
+        ln -sfn "$php_bin" "${dest}/php"
+    fi
+
+    fedora_link_tool "$version" phpize "$dest"
+    fedora_link_tool "$version" php-config "$dest"
+    fedora_link_tool "$version" phar "$dest"
+    fedora_link_tool "$version" phar.phar "$dest"
+    fedora_link_tool "$version" phpdbg "$dest"
+    fedora_link_tool "$version" php-fpm "$dest"
+
+    mkdir -p "$PHPSWITCHER_DIR"
+    printf '%s\n' "$version" > "${PHPSWITCHER_DIR}/active_version"
+
+    echo_message "Successfully switched to PHP ${version}."
+    echo_message "Run 'php --version' to verify."
+    case ":${PATH}:" in
+        *":${PHPSWITCHER_DIR}/bin:"*)
+            ;;
+        *)
+            echo_message "Add ${PHPSWITCHER_DIR}/bin to the front of PATH so the php command uses this version."
+            ;;
+    esac
+}
+
+fedora_remi_repo_present() {
+    local root repo
+    root=$(fedora_root)
+    for repo in remi-safe.repo remi.repo remi-modular.repo; do
+        if [ -f "${root}/etc/yum.repos.d/${repo}" ]; then
+            return 0
+        fi
+    done
+    if command -v dnf >/dev/null 2>&1; then
+        if dnf -q repolist --enabled 2>/dev/null | grep -E -q '(^|[[:space:]])remi(-safe|-modular)?([[:space:]]|$)'; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+fedora_ensure_remi_repo() {
+    local file version_id rpm_url
+    fedora_require_dnf
+    if fedora_remi_repo_present; then
+        return 0
+    fi
+
+    file=$(os_release_file)
+    version_id=$(os_release_value "$file" VERSION_ID || true)
+    if ! [[ "$version_id" =~ ^[0-9]+$ ]]; then
+        echo_error "Could not determine the Fedora release from ${file}."
+        echo "Install the Remi repository, then retry. See https://rpms.remirepo.net/wizard/"
+        echo "  sudo dnf install https://rpms.remirepo.net/fedora/remi-release-<version>.rpm"
+        exit 1
+    fi
+
+    rpm_url="https://rpms.remirepo.net/fedora/remi-release-${version_id}.rpm"
+    echo_message "Installing the Remi repository (${rpm_url})..."
+    fedora_require_sudo
+    if ! sudo dnf install -y "$rpm_url"; then
+        echo_error "Failed to install the Remi repository from ${rpm_url}."
+        echo "Side-by-side PHP versions come from Remi Software Collections in the remi-safe repository."
+        echo "See https://rpms.remirepo.net/wizard/"
+        exit 1
+    fi
+}
+
+fedora_read_version_arg() {
+    local requested_version="$1"
+    local usage="$2"
+
+    if [ -z "$requested_version" ]; then
+        echo_message "Version argument missing, attempting auto-detection..."
+        if ! requested_version=$(detect_version); then
+            echo_error "PHP version not specified and could not be detected automatically."
+            printf '%s\n' "$usage" >&2
+            exit 1
+        fi
+    fi
+    if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo_error "Invalid version format: \"${requested_version}\". Please use format X.Y (e.g., 7.4, 8.1)."
+        exit 1
+    fi
+    printf '%s\n' "$requested_version"
+}
+
+command_list_fedora() {
+    local versions version current
+    echo_message "Installed PHP Versions (via Remi):"
+    versions=$(fedora_installed_versions || true)
+    if [ -z "$versions" ]; then
+        echo "No PHP versions found."
+        echo "Install one with: phpswitcher install <version>"
+        return 0
+    fi
+    current=$(fedora_current_version || true)
+    while IFS= read -r version; do
+        [ -n "$version" ] || continue
+        if [ "$version" = "$current" ]; then
+            echo " * ${version} (active)"
+        else
+            echo "   ${version}"
+        fi
+    done <<< "$versions"
+}
+
+command_use_fedora() {
+    local requested_version
+    requested_version=$(fedora_read_version_arg "${1:-}" "Usage: phpswitcher use [<version>]") || exit 1
+    echo_message "Attempting to switch to PHP ${requested_version}..."
+    fedora_switch_to "$requested_version"
+}
+
+command_install_fedora() {
+    local requested_version scl
+    requested_version=$(fedora_read_version_arg "${1:-}" "Usage: phpswitcher install [<version>]") || exit 1
+    scl=$(fedora_scl_name "$requested_version")
+    echo_message "Attempting to install PHP ${requested_version} (${scl})..."
+
+    fedora_require_dnf
+    fedora_require_sudo
+    fedora_ensure_remi_repo
+
+    echo_message "Installing ${scl} and ${scl}-php-cli..."
+    if ! sudo dnf install -y "$scl" "${scl}-php-cli"; then
+        echo_error "Failed to install ${scl} (PHP ${requested_version}) with dnf."
+        echo "Expected Remi Software Collection packages ${scl} and ${scl}-php-cli from remi-safe."
+        echo "Those provide /usr/bin/${scl} and /opt/remi/${scl}/root/usr/bin/php."
+        exit 1
+    fi
+    if ! fedora_resolve_tool "$requested_version" php >/dev/null; then
+        echo_error "dnf finished, but PHP ${requested_version} is still missing."
+        fedora_missing_php_message "$requested_version"
+        exit 1
+    fi
+    echo_message "PHP ${requested_version} installed successfully."
+
+    if [ -t 0 ]; then
+        read -r -p "Would you like to switch to PHP ${requested_version} now? (y/N) " -n 1 REPLY
+        echo
+        if [[ "${REPLY:-}" =~ ^[Yy]$ ]]; then
+            command_use "$requested_version"
+        fi
+    else
+        echo_message "Non-interactive mode detected. Switching to PHP ${requested_version} automatically."
+        command_use "$requested_version" --quiet
+    fi
+}
+
+command_uninstall_fedora() {
+    local requested_version scl current name recorded
+    local -a packages
+    requested_version="${1:-}"
+    if [ -z "$requested_version" ]; then
+        echo_error "Please specify a PHP version to uninstall."
+        echo "Usage: phpswitcher uninstall <version>"
+        exit 1
+    fi
+    if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo_error "Invalid version format: \"${requested_version}\". Please use format X.Y (e.g., 7.4, 8.1)."
+        exit 1
+    fi
+
+    scl=$(fedora_scl_name "$requested_version")
+    if ! fedora_php_present "$requested_version"; then
+        echo_error "PHP version ${requested_version} is not installed."
+        exit 1
+    fi
+
+    current=$(fedora_current_version || true)
+    if [ "$current" = "$requested_version" ]; then
+        echo_error "Cannot uninstall PHP ${requested_version} because it is the currently active version."
+        echo "Please switch to a different version first with: phpswitcher use <other-version>"
+        exit 1
+    fi
+
+    if [ -t 0 ]; then
+        read -r -p "Are you sure you want to uninstall PHP ${requested_version}? (y/N) " -n 1 REPLY
+        echo
+        if [[ ! "${REPLY:-}" =~ ^[Yy]$ ]]; then
+            echo "Aborted."
+            return 0
+        fi
+    fi
+
+    fedora_require_dnf
+    fedora_require_sudo
+    echo_message "Uninstalling ${scl} and related packages..."
+    packages=()
+    if command -v rpm >/dev/null 2>&1; then
+        while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            packages+=("$name")
+        done < <(rpm -qa --qf '%{NAME}\n' | grep -E "^${scl}(-|$)" || true)
+    fi
+    if [ "${#packages[@]}" -eq 0 ]; then
+        packages=("$scl" "${scl}-runtime" "${scl}-php-cli")
+    fi
+    if ! sudo dnf remove -y "${packages[@]}"; then
+        echo_error "Failed to uninstall ${scl}."
+        exit 1
+    fi
+
+    if [ -f "${PHPSWITCHER_DIR}/active_version" ]; then
+        recorded=$(tr -d '[:space:]' < "${PHPSWITCHER_DIR}/active_version")
+        if [ "$recorded" = "$requested_version" ]; then
+            rm -f "${PHPSWITCHER_DIR}/active_version"
+            if current=$(fedora_current_version); then
+                printf '%s\n' "$current" > "${PHPSWITCHER_DIR}/active_version"
+            fi
+        fi
+    fi
+    echo_message "PHP ${requested_version} has been uninstalled successfully."
+}
+
+fedora_extension_candidates() {
+    local scl="$1"
+    local extension="$2"
+    printf '%s\n' "${scl}-php-${extension}"
+    printf '%s\n' "${scl}-php-pecl-${extension}"
+}
+
+command_extensions_list_fedora() {
+    local requested_version="$1"
+    local php_bin
+    echo_message "Installed extensions for PHP ${requested_version}:"
+    php_bin=$(fedora_resolve_tool "$requested_version" php || true)
+    if [ -z "$php_bin" ]; then
+        echo_error "PHP ${requested_version} does not appear to be installed."
+        fedora_missing_php_message "$requested_version"
+        exit 1
+    fi
+    "$php_bin" -m 2>/dev/null | tail -n +2
+}
+
+command_extensions_install_fedora() {
+    local extension="$1"
+    local requested_version="$2"
+    local scl pkg chosen
+    scl=$(fedora_scl_name "$requested_version")
+    fedora_require_dnf
+    fedora_require_sudo
+    fedora_ensure_remi_repo
+
+    chosen=""
+    while IFS= read -r pkg; do
+        if dnf -q info "$pkg" >/dev/null 2>&1; then
+            chosen="$pkg"
+            break
+        fi
+    done < <(fedora_extension_candidates "$scl" "$extension")
+
+    if [ -z "$chosen" ]; then
+        echo_error "No Remi package found for extension ${extension} on PHP ${requested_version}."
+        echo "Tried ${scl}-php-${extension} and ${scl}-php-pecl-${extension}."
+        echo "The Remi repository may be missing, or this extension is not packaged for that PHP version."
+        exit 1
+    fi
+
+    echo_message "Installing ${chosen} via dnf..."
+    if ! sudo dnf install -y "$chosen"; then
+        echo_error "Failed to install ${chosen}."
+        exit 1
+    fi
+    echo_message "Extension ${extension} installed successfully for PHP ${requested_version}."
+}
+
+command_extensions_uninstall_fedora() {
+    local extension="$1"
+    local requested_version="$2"
+    local scl pkg removed
+    scl=$(fedora_scl_name "$requested_version")
+    if ! command -v rpm >/dev/null 2>&1; then
+        echo_error "rpm is required to find the installed PHP extension package."
+        exit 1
+    fi
+    fedora_require_dnf
+    fedora_require_sudo
+
+    removed=0
+    while IFS= read -r pkg; do
+        if rpm -q "$pkg" >/dev/null 2>&1; then
+            echo_message "Removing ${pkg} via dnf..."
+            if ! sudo dnf remove -y "$pkg"; then
+                echo_error "Failed to remove ${pkg}."
+                exit 1
+            fi
+            removed=1
+        fi
+    done < <(fedora_extension_candidates "$scl" "$extension")
+
+    if [ "$removed" -eq 0 ]; then
+        echo_error "Extension ${extension} is not installed for PHP ${requested_version}."
+        echo "Tried ${scl}-php-${extension} and ${scl}-php-pecl-${extension}."
+        exit 1
+    fi
+    echo_message "Extension ${extension} removed successfully for PHP ${requested_version}."
+}
+
 command_list_macos() {
     echo_message "Installed PHP Versions (via Homebrew):"
 
@@ -260,6 +915,11 @@ command_list_macos() {
 }
 
 command_list_linux() {
+    if linux_is_fedora; then
+        command_list_fedora
+        return
+    fi
+
     echo_message "Installed PHP Versions (via update-alternatives):"
 
     if ! command -v update-alternatives >/dev/null; then
@@ -521,6 +1181,11 @@ command_install_macos() {
 }
 
 command_use_linux() {
+    if linux_is_fedora; then
+        command_use_fedora "$@"
+        return
+    fi
+
     local requested_version="$1"
 
     # --- Version Auto-Detection ---
@@ -591,6 +1256,11 @@ command_use_linux() {
 }
 
 command_install_linux() {
+    if linux_is_fedora; then
+        command_install_fedora "$@"
+        return
+    fi
+
     local requested_version="$1"
 
     # --- Version Auto-Detection (similar to 'use' command) ---
@@ -720,6 +1390,11 @@ command_uninstall_macos() {
 }
 
 command_uninstall_linux() {
+    if linux_is_fedora; then
+        command_uninstall_fedora "$@"
+        return
+    fi
+
     local requested_version="$1"
 
     if [ -z "$requested_version" ]; then
@@ -956,6 +1631,10 @@ command_extensions_list() {
         fi
         "$php_bin" -m 2>/dev/null | tail -n +2
     elif [ "$OS" = "linux" ]; then
+        if linux_is_fedora; then
+            command_extensions_list_fedora "$requested_version"
+            return
+        fi
         echo_message "Installed extensions for PHP $requested_version:"
         local php_bin="/usr/bin/php$requested_version"
         if [ ! -x "$php_bin" ]; then
@@ -1024,6 +1703,10 @@ command_extensions_install() {
             exit 1
         fi
     elif [ "$OS" = "linux" ]; then
+        if linux_is_fedora; then
+            command_extensions_install_fedora "$extension" "$requested_version"
+            return
+        fi
         local target_package="php${requested_version}-${extension}"
         echo_message "Installing $target_package via apt..."
         if sudo apt-get install -y "$target_package"; then
@@ -1054,6 +1737,10 @@ command_extensions_uninstall() {
             exit 1
         fi
     elif [ "$OS" = "linux" ]; then
+        if linux_is_fedora; then
+            command_extensions_uninstall_fedora "$extension" "$requested_version"
+            return
+        fi
         local target_package="php${requested_version}-${extension}"
         echo_message "Removing $target_package via apt..."
         if sudo apt-get remove -y "$target_package"; then
@@ -1148,6 +1835,10 @@ command_help() {
     echo "Platform Support:"
     echo "  - macOS: Uses Homebrew to install and switch PHP versions (php@x.y)."
     echo "  - Linux (Debian/Ubuntu): Uses APT with ppa:ondrej/php. Requires 'sudo' for installation and switching."
+    echo "  - Linux (Fedora): Uses dnf and Remi Software Collections (php81, php82, ...) from remi-safe."
+    echo "                    Binaries are /usr/bin/php81 and /opt/remi/php81/root/usr/bin/php."
+    echo "                    Switching links php into \$PHPSWITCHER_DIR/bin. sudo installs packages."
+    echo "                    Quiet mode uses sudo -n when an alternatives entry exists, and otherwise only writes the symlink."
     echo ""
     echo "Examples:"
     echo "  phpswitcher install 8.1"

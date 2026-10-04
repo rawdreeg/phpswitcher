@@ -6,7 +6,7 @@ A simple CLI tool to manage multiple PHP versions on macOS and Linux.
 
 ## Features
 
-*   Install specific PHP versions (via Homebrew for macOS, or APT for Linux).
+*   Install specific PHP versions (via Homebrew on macOS, APT on Debian/Ubuntu, or dnf on Fedora).
 *   Uninstall PHP versions you no longer need.
 *   Switch the active PHP version.
 *   List all installed PHP versions.
@@ -21,6 +21,7 @@ A simple CLI tool to manage multiple PHP versions on macOS and Linux.
 
 *   **macOS:** Requires **Homebrew** for installing and managing PHP versions.
 *   **Linux (Debian/Ubuntu):** Requires `apt` and the `software-properties-common` package. `sudo` is required for installing and switching versions.
+*   **Linux (Fedora):** Requires `dnf`. Side-by-side versions come from [Remi's RPM repository](https://rpms.remirepo.net/) (`remi-safe` Software Collections such as `php81` and `php82`). `sudo` is required to install and remove packages.
 
 ## Installation
 
@@ -102,7 +103,17 @@ cd my-project-using-php7.4/
 phpswitcher use
 ```
 
-On Linux, `use` also switches `phpize`, `php-config`, `phar`, `phar.phar`, `phpdbg`, and `php-fpm` when those binaries are installed. Versioned FPM services such as `php8.1-fpm` are left running; the `php-fpm` alternative only moves the unversioned binary.
+On Debian and Ubuntu, `use` also switches `phpize`, `php-config`, `phar`, `phar.phar`, `phpdbg`, and `php-fpm` when those binaries are installed. Versioned FPM services such as `php8.1-fpm` are left running; the `php-fpm` alternative only moves the unversioned binary.
+
+### Fedora
+
+`phpswitcher install 8.2` installs the Remi Software Collection `php82` and `php82-php-cli` from `remi-safe`. When that repository is missing, phpswitcher installs `https://rpms.remirepo.net/fedora/remi-release-<fedora version>.rpm` (the release number comes from `/etc/os-release`).
+
+Those packages sit beside the system PHP. `/usr/bin/php82` runs `/opt/remi/php82/root/usr/bin/php`. `phpswitcher use 8.2` points `php` at that binary with a symlink in `$PHPSWITCHER_DIR/bin`, which the installer already puts on `PATH`. The same directory receives `phpize`, `php-config`, `phar`, `phar.phar`, `phpdbg`, and `php-fpm` when the matching Remi binaries are present (`/usr/bin/php82-phar`, `/usr/bin/php82-phpdbg`, `/opt/remi/php82/root/usr/sbin/php-fpm`, and the devel binaries for `phpize` and `php-config`). The versioned service `php82-php-fpm` is left running.
+
+If that PHP binary is already registered with `alternatives` or `update-alternatives`, `use` selects it there. Quiet mode (`--quiet` or `PHPSWITCHER_QUIET`) runs that step with `sudo -n`. When the binary is not registered, `use` writes the symlink in `$PHPSWITCHER_DIR/bin`. A missing Remi repository or binary stops with an error that names the package and the paths it looked for.
+
+A dnf module stream such as `php:remi-8.2` is a single system PHP. Side-by-side installs use the Remi Software Collections above.
 
 **Set a global default PHP version:**
 
@@ -168,7 +179,7 @@ phpswitcher extensions uninstall xdebug
 phpswitcher extensions uninstall redis 8.1
 ```
 
-On Linux, extensions are installed and removed via `apt` (e.g., `php8.1-xdebug`). On macOS, PECL is used.
+On Debian and Ubuntu, extensions are installed and removed via `apt` (e.g., `php8.1-xdebug`). On Fedora, `dnf` installs `php81-php-mbstring` or, for PECL extensions, `php81-php-pecl-xdebug`. On macOS, PECL is used.
 
 **Show Version:**
 

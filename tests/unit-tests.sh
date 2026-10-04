@@ -15,6 +15,12 @@ FAIL_COUNT=0
 TEST_TMPDIR=""
 
 setup() {
+    if [ -n "${FEDORA_SAVED_PATH:-}" ]; then
+        PATH="$FEDORA_SAVED_PATH"
+        unset FEDORA_SAVED_PATH
+    fi
+    unset PHPSWITCHER_OS_RELEASE PHPSWITCHER_FEDORA_ROOT DNF_LOG SUDO_LOG RPM_LOG APT_LOG ALT_LOG ALT_TARGET
+    unset DNF_FAIL_REMI SUDO_DENY_N SUDO_REQUIRE_N
     TEST_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/phpswitcher-unit.XXXXXXXX")
     export PHPSWITCHER_DIR="$TEST_TMPDIR"
     export PHPSWITCHER_NO_UPDATE_CHECK=1
@@ -23,6 +29,12 @@ setup() {
 }
 
 teardown() {
+    if [ -n "${FEDORA_SAVED_PATH:-}" ]; then
+        PATH="$FEDORA_SAVED_PATH"
+        unset FEDORA_SAVED_PATH
+    fi
+    unset PHPSWITCHER_OS_RELEASE PHPSWITCHER_FEDORA_ROOT DNF_LOG SUDO_LOG RPM_LOG APT_LOG ALT_LOG ALT_TARGET
+    unset DNF_FAIL_REMI SUDO_DENY_N SUDO_REQUIRE_N
     rm -rf "$TEST_TMPDIR" 2>/dev/null || true
 }
 
@@ -879,6 +891,405 @@ test_version_parent_of_script() {
 }
 
 # =============================================
+# FEDORA / DNF
+# =============================================
+
+write_executable() {
+    local path="$1"
+    shift
+    mkdir -p "$(dirname "$path")"
+    printf '%s\n' "$@" > "$path"
+    chmod +x "$path"
+}
+
+fedora_write_stubs() {
+    local bindir="$1"
+    mkdir -p "$bindir"
+
+    cat > "$bindir/dnf" << 'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "${DNF_LOG:?}"
+cmd=""
+pkg=""
+for arg in "$@"; do
+    case "$arg" in
+        -q|-y|--enabled) ;;
+        info|install|remove|repolist|list) cmd="$arg" ;;
+        *)
+            if [ -z "$pkg" ]; then
+                pkg="$arg"
+            fi
+            ;;
+    esac
+done
+if [ "$cmd" = "repolist" ]; then
+    exit 1
+fi
+if [ "$cmd" = "install" ] && [[ "$pkg" == *remi-release* ]] && [ "${DNF_FAIL_REMI:-}" = "1" ]; then
+    exit 1
+fi
+if [ "$cmd" = "install" ] && [ "${DNF_FAIL_PACKAGE:-}" = "$pkg" ]; then
+    exit 1
+fi
+if [ "$cmd" = "info" ]; then
+    case "$pkg" in
+        php82-php-mbstring|php81-php-xml) exit 0 ;;
+        php82-php-xdebug) exit 1 ;;
+        php82-php-pecl-xdebug) exit 0 ;;
+        *) exit 1 ;;
+    esac
+fi
+exit 0
+EOF
+
+    cat > "$bindir/sudo" << 'EOF'
+#!/bin/bash
+printf 'sudo %s\n' "$*" >> "${SUDO_LOG:?}"
+if [ "${1:-}" = "-n" ]; then
+    if [ "${SUDO_DENY_N:-}" = "1" ]; then
+        printf 'denied -n\n' >> "${SUDO_LOG}"
+        exit 1
+    fi
+    shift
+elif [ "${SUDO_REQUIRE_N:-}" = "1" ]; then
+    printf 'plain sudo blocked\n' >> "${SUDO_LOG}"
+    exit 99
+fi
+"$@"
+EOF
+
+    cat > "$bindir/rpm" << 'EOF'
+#!/bin/bash
+printf 'rpm %s\n' "$*" >> "${RPM_LOG:?}"
+if [ "${1:-}" = "-q" ]; then
+    case "${2:-}" in
+        php81-php-pecl-redis) exit 0 ;;
+        *) exit 1 ;;
+    esac
+fi
+if [ "${1:-}" = "-qa" ]; then
+    printf '%s\n' "php74" "php74-php-cli" "php74-runtime" "php81-php-cli"
+    exit 0
+fi
+exit 1
+EOF
+
+    cat > "$bindir/apt-get" << 'EOF'
+#!/bin/bash
+printf 'apt-get %s\n' "$*" >> "${APT_LOG:?}"
+exit 99
+EOF
+
+    cat > "$bindir/add-apt-repository" << 'EOF'
+#!/bin/bash
+printf 'add-apt-repository %s\n' "$*" >> "${APT_LOG:?}"
+exit 99
+EOF
+
+    chmod +x "$bindir/dnf" "$bindir/sudo" "$bindir/rpm" "$bindir/apt-get" "$bindir/add-apt-repository"
+}
+
+fedora_test_env() {
+    local bindir="$TEST_TMPDIR/fedora-bin"
+    local root="$TEST_TMPDIR/fedora-root"
+    FEDORA_SAVED_PATH="$PATH"
+    mkdir -p "$root/etc/yum.repos.d" "$root/usr/bin"
+    printf '%s\n' 'remi-safe enabled' > "$root/etc/yum.repos.d/remi-safe.repo"
+    cat > "$TEST_TMPDIR/fedora-os-release" << 'EOF'
+NAME="Fedora Linux"
+ID=fedora
+VERSION_ID=43
+EOF
+    export PHPSWITCHER_OS_RELEASE="$TEST_TMPDIR/fedora-os-release"
+    export PHPSWITCHER_FEDORA_ROOT="$root"
+    export DNF_LOG="$TEST_TMPDIR/dnf.log"
+    export SUDO_LOG="$TEST_TMPDIR/sudo.log"
+    export RPM_LOG="$TEST_TMPDIR/rpm.log"
+    export APT_LOG="$TEST_TMPDIR/apt.log"
+    export ALT_LOG="$TEST_TMPDIR/alt.log"
+    : > "$DNF_LOG"
+    : > "$SUDO_LOG"
+    : > "$RPM_LOG"
+    : > "$APT_LOG"
+    : > "$ALT_LOG"
+    fedora_write_stubs "$bindir"
+    PATH="$bindir:$FEDORA_SAVED_PATH"
+    export PATH
+}
+
+fedora_php_fixture() {
+    local version="$1"
+    local scl="php${version//./}"
+    local root="$PHPSWITCHER_FEDORA_ROOT"
+    write_executable "$root/usr/bin/${scl}" '#!/bin/sh' 'printf "%s\n" "[PHP Modules]" "xdebug" "mbstring"'
+    mkdir -p "$root/opt/remi/${scl}/root/usr/bin" "$root/opt/remi/${scl}/root/usr/sbin"
+    write_executable "$root/opt/remi/${scl}/root/usr/bin/phpize" '#!/bin/sh' 'printf "%s\n" phpize'
+    write_executable "$root/opt/remi/${scl}/root/usr/bin/phar.phar" '#!/bin/sh' 'printf "%s\n" phar.phar'
+    write_executable "$root/opt/remi/${scl}/root/usr/sbin/php-fpm" '#!/bin/sh' 'printf "%s\n" php-fpm'
+    write_executable "$root/usr/bin/${scl}-phar" '#!/bin/sh' 'printf "%s\n" phar'
+    write_executable "$root/usr/bin/${scl}-phpdbg" '#!/bin/sh' 'printf "%s\n" phpdbg'
+}
+
+test_fedora_family_chooses_remi_paths() {
+    setup
+    fedora_test_env
+    test_case "fedora: use looks up Remi binaries, not /usr/bin/phpX.Y"
+    local output
+    output=$("$PHPSWITCHER" use 9.9 2>&1 || true)
+    assert_contains "$output" "/usr/bin/php99" "Names the Remi wrapper"
+    assert_contains "$output" "/opt/remi/php99/root/usr/bin/php" "Names the SCL binary"
+    assert_not_contains "$output" "/usr/bin/php9.9" "Does not use the Debian binary path"
+    if [ -s "$SUDO_LOG" ]; then
+        report_failure "sudo log should stay empty when the binary is missing"
+        echo "  sudo log: $(cat "$SUDO_LOG")"
+    else
+        report_success "sudo log stays empty when the binary is missing"
+    fi
+    teardown
+}
+
+test_ubuntu_family_keeps_apt_paths() {
+    setup
+    fedora_test_env
+    cat > "$TEST_TMPDIR/ubuntu-os-release" << 'EOF'
+ID=ubuntu
+ID_LIKE=debian
+VERSION_ID="24.04"
+EOF
+    export PHPSWITCHER_OS_RELEASE="$TEST_TMPDIR/ubuntu-os-release"
+    test_case "ubuntu: use keeps /usr/bin/phpX.Y even when dnf is on PATH"
+    local output
+    output=$("$PHPSWITCHER" use 9.9 2>&1 || true)
+    assert_contains "$output" "/usr/bin/php9.9" "Uses the Debian binary path"
+    assert_not_contains "$output" "php99" "Does not use a Remi SCL name"
+    if [ -s "$DNF_LOG" ]; then
+        report_failure "dnf should not run for an Ubuntu os-release"
+        echo "  dnf log: $(cat "$DNF_LOG")"
+    else
+        report_success "dnf is not invoked"
+    fi
+    teardown
+}
+
+test_fedora_install_uses_dnf_and_symlinks() {
+    setup
+    fedora_test_env
+    fedora_php_fixture "8.2"
+    mkdir -p "$PHPSWITCHER_DIR/bin"
+    # The installer puts this directory on PATH. Include it so the warning stays quiet.
+    PATH="${PHPSWITCHER_DIR}/bin:${PATH}"
+    test_case "fedora install: dnf installs php82 and use symlinks the Remi tools"
+    local output status
+    status=0
+    output=$("$PHPSWITCHER" install 8.2 2>&1) || status=$?
+    assert_success "$status" "install 8.2 exits successfully"
+    # assert_success consumed the previous status. Re-check the log instead of the lost status.
+    assert_contains "$output" "php82" "Mentions the Remi package"
+    assert_contains "$(cat "$DNF_LOG")" "install -y php82 php82-php-cli" "dnf installs the SCL and CLI packages"
+    assert_not_contains "$(cat "$DNF_LOG")" "remi-release" "Existing remi-safe repo skips the release RPM"
+    assert_not_contains "$(cat "$APT_LOG")" "apt-get" "apt-get is not used"
+    assert_file_contents "$PHPSWITCHER_DIR/active_version" "8.2" "active_version is 8.2"
+    local php_target
+    php_target=$(readlink "$PHPSWITCHER_DIR/bin/php")
+    assert_contains "$php_target" "/usr/bin/php82" "php symlink targets the Remi wrapper"
+    assert_contains "$(readlink "$PHPSWITCHER_DIR/bin/phar.phar")" "phar.phar" "phar.phar symlink is created"
+    assert_contains "$(readlink "$PHPSWITCHER_DIR/bin/php-fpm")" "/usr/sbin/php-fpm" "php-fpm symlink targets the SCL sbin binary"
+    if grep -q 'plain sudo blocked' "$SUDO_LOG" 2>/dev/null; then
+        report_failure "install/use should not block on a sudo password"
+    else
+        report_success "package install sudo ran through the stub"
+    fi
+    teardown
+}
+
+test_fedora_install_missing_repo() {
+    setup
+    fedora_test_env
+    rm -f "$PHPSWITCHER_FEDORA_ROOT/etc/yum.repos.d/remi-safe.repo"
+    export DNF_FAIL_REMI=1
+    test_case "fedora install: missing Remi repo fails before a PHP package install"
+    local output
+    output=$("$PHPSWITCHER" install 8.1 2>&1 || true)
+    assert_contains "$output" "Failed to install the Remi repository" "Reports the repository failure"
+    assert_contains "$output" "remi-release-43.rpm" "Uses VERSION_ID from os-release"
+    assert_contains "$(cat "$DNF_LOG")" "https://rpms.remirepo.net/fedora/remi-release-43.rpm" "Attempts the Remi release package"
+    assert_not_contains "$(cat "$DNF_LOG")" "install -y php81 php81-php-cli" "Does not install PHP after the repo failure"
+    teardown
+}
+
+test_fedora_install_rejects_bad_version() {
+    setup
+    fedora_test_env
+    test_case "fedora install: rejects an unsafe version before dnf"
+    local output
+    output=$("$PHPSWITCHER" install "8.1;rm" 2>&1 || true)
+    assert_contains "$output" "Invalid version format" "Rejects a version with a shell metacharacter"
+    output=$("$PHPSWITCHER" install "8" 2>&1 || true)
+    assert_contains "$output" "Invalid version format" "Rejects a major-only version"
+    if [ -s "$DNF_LOG" ]; then
+        report_failure "dnf should not run for an invalid version"
+        echo "  dnf log: $(cat "$DNF_LOG")"
+    else
+        report_success "dnf is not invoked"
+    fi
+    teardown
+}
+
+test_fedora_missing_dnf() {
+    setup
+    local dir="$TEST_TMPDIR/no-dnf"
+    local tool src
+    mkdir -p "$dir"
+    for tool in bash sh cat mkdir ln readlink rm grep sed chmod; do
+        src=$(command -v "$tool" 2>/dev/null || true)
+        if [ -n "$src" ]; then
+            ln -s "$src" "$dir/$tool"
+        fi
+    done
+    FEDORA_SAVED_PATH="$PATH"
+    PATH="$dir"
+    cat > "$TEST_TMPDIR/fedora-os-release" << 'EOF'
+ID=fedora
+VERSION_ID=43
+EOF
+    export PHPSWITCHER_OS_RELEASE="$TEST_TMPDIR/fedora-os-release"
+    test_case "fedora install: missing dnf fails without sudo"
+    local output
+    output=$("$PHPSWITCHER" install 8.1 2>&1 || true)
+    assert_contains "$output" "dnf" "Names dnf in the error"
+    assert_contains "$output" "not available" "Says dnf is not available"
+    teardown
+}
+
+test_fedora_quiet_use_does_not_block_on_sudo() {
+    setup
+    fedora_test_env
+    fedora_php_fixture "8.1"
+    export SUDO_DENY_N=1
+    export SUDO_REQUIRE_N=1
+    export ALT_TARGET="${PHPSWITCHER_FEDORA_ROOT}/usr/bin/php81"
+    cat > "$TEST_TMPDIR/fedora-bin/update-alternatives" << 'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "${ALT_LOG:?}"
+if [ "${1:-}" = "--list" ]; then
+    printf '%s\n' "${ALT_TARGET:-}"
+    exit 0
+fi
+exit 0
+EOF
+    chmod +x "$TEST_TMPDIR/fedora-bin/update-alternatives"
+    test_case "fedora quiet use: sudo -n failure still switches with a symlink"
+    local output status
+    status=0
+    output=$("$PHPSWITCHER" use 8.1 --quiet 2>&1) || status=$?
+    assert_success "$status" "quiet use exits successfully"
+    assert_not_contains "$output" "Successfully switched" "Quiet mode suppresses the success message"
+    assert_file_contents "$PHPSWITCHER_DIR/active_version" "8.1" "active_version is 8.1"
+    local php_target
+    php_target=$(readlink "$PHPSWITCHER_DIR/bin/php")
+    assert_contains "$php_target" "/usr/bin/php81" "Symlink is written when sudo -n cannot set alternatives"
+    assert_contains "$(cat "$SUDO_LOG")" "sudo -n" "Quiet mode asks sudo for a non-interactive check"
+    assert_not_contains "$(cat "$SUDO_LOG")" "plain sudo blocked" "Quiet mode does not call sudo without -n"
+    teardown
+}
+
+test_fedora_list_marks_active_version() {
+    setup
+    fedora_test_env
+    fedora_php_fixture "8.1"
+    fedora_php_fixture "8.2"
+    "$PHPSWITCHER" use 8.2 --quiet >/dev/null 2>&1 || true
+    test_case "fedora list: shows Remi versions and the active symlink"
+    local output
+    output=$("$PHPSWITCHER" list 2>&1 || true)
+    assert_contains "$output" "via Remi" "List header names Remi"
+    assert_contains "$output" "* 8.2 (active)" "Marks 8.2 active"
+    assert_contains "$output" "8.1" "Lists 8.1"
+    teardown
+}
+
+test_fedora_uninstall_refuses_active_and_removes_other() {
+    setup
+    fedora_test_env
+    fedora_php_fixture "8.1"
+    fedora_php_fixture "7.4"
+    "$PHPSWITCHER" use 8.1 --quiet >/dev/null 2>&1 || true
+    : > "$DNF_LOG"
+    : > "$SUDO_LOG"
+    test_case "fedora uninstall: active version is kept, another version uses dnf remove"
+    local output
+    output=$("$PHPSWITCHER" uninstall 8.1 2>&1 || true)
+    assert_contains "$output" "currently active version" "Refuses to remove the active version"
+    assert_not_contains "$DNF_LOG" "remove" "Active version does not call dnf remove"
+    output=$("$PHPSWITCHER" uninstall 7.4 2>&1 || true)
+    assert_contains "$output" "uninstalled successfully" "Removes an inactive version"
+    assert_contains "$(cat "$DNF_LOG")" "remove -y php74 php74-php-cli php74-runtime" "dnf remove gets the php74 packages from rpm"
+    assert_not_contains "$(cat "$APT_LOG")" "apt-get" "apt-get is not used"
+    teardown
+}
+
+test_fedora_extension_names() {
+    setup
+    fedora_test_env
+    fedora_php_fixture "8.2"
+    test_case "fedora extensions: version and package name checks"
+    local output
+    output=$("$PHPSWITCHER" extensions install '../xdebug' 8.2 2>&1 || true)
+    assert_contains "$output" "Invalid extension name" "Rejects a path-like extension name"
+    output=$("$PHPSWITCHER" extensions install xdebug "8" 2>&1 || true)
+    assert_contains "$output" "Invalid version format" "Rejects a bad extension version"
+    if [ -s "$DNF_LOG" ]; then
+        report_failure "dnf should not run for an invalid extension or version"
+        echo "  dnf log: $(cat "$DNF_LOG")"
+    else
+        report_success "dnf is not invoked for invalid extension input"
+    fi
+    : > "$DNF_LOG"
+    output=$("$PHPSWITCHER" extensions install xdebug 8.2 2>&1 || true)
+    assert_contains "$output" "php82-php-pecl-xdebug" "PECL extension uses the php82-php-pecl- name"
+    assert_contains "$(cat "$DNF_LOG")" "install -y php82-php-pecl-xdebug" "dnf installs the PECL package"
+    assert_not_contains "$(cat "$DNF_LOG")" "install -y php82-php-xdebug" "The missing core package is not installed"
+    output=$("$PHPSWITCHER" extensions install mbstring 8.2 2>&1 || true)
+    assert_contains "$(cat "$DNF_LOG")" "install -y php82-php-mbstring" "Core extension uses php82-php-mbstring"
+    output=$("$PHPSWITCHER" extensions 8.2 2>&1 || true)
+    assert_contains "$output" "xdebug" "Lists modules from the Remi binary"
+    output=$("$PHPSWITCHER" extensions uninstall redis 8.1 2>&1 || true)
+    assert_contains "$output" "php81-php-pecl-redis" "Uninstall removes the installed PECL package"
+    assert_contains "$(cat "$DNF_LOG")" "remove -y php81-php-pecl-redis" "dnf remove is used for the extension"
+    teardown
+}
+
+test_fedora_detection_is_single() {
+    test_case "fedora detection: one function, shell hooks do not reimplement it"
+    local defs fish_init bash_init
+    defs=$(grep -c '^detect_linux_family()' "$PHPSWITCHER" || true)
+    if [ "$defs" = "1" ]; then
+        report_success "detect_linux_family is defined once"
+    else
+        report_failure "detect_linux_family should be defined once (found $defs)"
+    fi
+    fish_init=$(cat "$SCRIPT_DIR/bin/phpswitcher-init.fish")
+    bash_init=$(cat "$SCRIPT_DIR/bin/phpswitcher-init.sh")
+    assert_not_contains "$fish_init" "os-release" "Fish hook does not read os-release"
+    assert_not_contains "$bash_init" "os-release" "Bash hook does not read os-release"
+    assert_contains "$fish_init" "phpswitcher use" "Fish still switches through the CLI"
+    assert_contains "$bash_init" "phpswitcher use" "Bash still switches through the CLI"
+}
+
+test_help_mentions_fedora() {
+    setup
+    test_case "help: mentions Fedora, dnf, and Remi"
+    local output
+    output=$("$PHPSWITCHER" help 2>&1)
+    assert_contains "$output" "Fedora" "Help mentions Fedora"
+    assert_contains "$output" "dnf" "Help mentions dnf"
+    assert_contains "$output" "Remi" "Help mentions Remi"
+    assert_contains "$output" "php81" "Help mentions the SCL package name"
+    assert_contains "$output" "Debian/Ubuntu" "Help still documents Debian/Ubuntu"
+    teardown
+}
+
+# =============================================
 # SHELL INTEGRATION
 # =============================================
 
@@ -1068,6 +1479,18 @@ main() {
     # Bash/Zsh completion
     test_completion_commands_list
     test_linux_switch_includes_fpm
+    test_fedora_family_chooses_remi_paths
+    test_ubuntu_family_keeps_apt_paths
+    test_fedora_install_uses_dnf_and_symlinks
+    test_fedora_install_missing_repo
+    test_fedora_install_rejects_bad_version
+    test_fedora_missing_dnf
+    test_fedora_quiet_use_does_not_block_on_sudo
+    test_fedora_list_marks_active_version
+    test_fedora_uninstall_refuses_active_and_removes_other
+    test_fedora_extension_names
+    test_fedora_detection_is_single
+    test_help_mentions_fedora
     test_checksum_scripts_refuse_without_match
     test_checksum_accepts_matching_archive
     test_checksum_rejects_tampered_archive
