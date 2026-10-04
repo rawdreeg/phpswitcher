@@ -34,7 +34,7 @@ if [ -n "$BASH_VERSION" ]; then
         if [ "${COMP_WORDS[1]}" = "extensions" ] && [ "$COMP_CWORD" -eq 2 ]; then
             local versions
             versions=$(_phpswitcher_installed_versions)
-            COMPREPLY=( $(compgen -W "list install $versions" -- "$cur") )
+            COMPREPLY=( $(compgen -W "list install uninstall $versions" -- "$cur") )
             return
         fi
 
@@ -63,7 +63,7 @@ if [ -n "$ZSH_VERSION" ]; then
             'list:List all installed PHP versions'
             'default:Set or show the global default PHP version'
             'status:Show current PHP version and detection info'
-            'extensions:List or install PHP extensions'
+            'extensions:List, install, or remove PHP extensions'
             'self-update:Update phpswitcher to the latest version'
             'version:Show the phpswitcher version'
             'help:Show help message'
@@ -92,6 +92,7 @@ if [ -n "$ZSH_VERSION" ]; then
                         subcommands=(
                             'list:List installed extensions'
                             'install:Install an extension'
+                            'uninstall:Remove an extension'
                         )
                         _describe 'subcommand' subcommands
                         versions=( ${(f)"$(_phpswitcher_installed_versions)"} )

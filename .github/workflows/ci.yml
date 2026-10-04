@@ -55,9 +55,21 @@ jobs:
       - name: Make scripts executable
         run: |
           chmod +x install.sh
+          chmod +x build.sh
           chmod +x tests/run-tests.sh
 
+      - name: Build checksummed artifact
+        run: |
+          ./build.sh
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum phpswitcher.tar.gz > phpswitcher.tar.gz.sha256
+          else
+            shasum -a 256 phpswitcher.tar.gz > phpswitcher.tar.gz.sha256
+          fi
+
       - name: Run installer
+        env:
+          PHPSWITCHER_ARTIFACT_URL: file://${{ github.workspace }}/phpswitcher.tar.gz
         run: ./install.sh
 
       - name: Add phpswitcher to PATH

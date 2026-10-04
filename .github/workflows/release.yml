@@ -3,11 +3,16 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., 0.4.0, 0.4.0-beta.1)'
+        description: 'Version to release (e.g., 0.6.0, 0.6.0-beta.1)'
         required: true
         type: string
       prerelease:
         description: 'Mark as pre-release (beta, rc, etc.)'
+        required: false
+        type: boolean
+        default: false
+      sync_existing:
+        description: 'Update version files from an already published release. Do not build or publish.'
         required: false
         type: boolean
         default: false
@@ -17,37 +22,239 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Validate version format
+      - name: Require Homebrew tap token
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |
-          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
-            echo "::error::Invalid version format: ${{ inputs.version }}. Expected X.Y.Z or X.Y.Z-suffix"
+          if [ -z "${TAP_GITHUB_TOKEN}" ]; then
+            echo "::error::TAP_GITHUB_TOKEN is not set. Add a token with contents and pull-request write on rawdreeg/homebrew-phpswitcher before releasing."
             exit 1
           fi
-      - name: Update version in build.sh
+
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate version and release refs
+        env:
+          VERSION: ${{ inputs.version }}
+          SYNC_EXISTING: ${{ inputs.sync_existing }}
         run: |
-          sed -i 's/^VERSION=".*"/VERSION="${{ inputs.version }}"/' build.sh
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+            echo "::error::Invalid version format: ${VERSION}. Expected X.Y.Z or X.Y.Z-suffix"
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            tag_exists=1
+          else
+            tag_exists=0
+          fi
+
+          if [ "$SYNC_EXISTING" = "true" ]; then
+            if [ "$tag_exists" -ne 1 ]; then
+              echo "::error::Tag v${VERSION} does not exist. Leave sync_existing unset to publish it."
+              exit 1
+            fi
+          elif [ "$tag_exists" -eq 1 ]; then
+            echo "::error::Tag v${VERSION} already exists. Set sync_existing to update version files without publishing."
+            exit 1
+          fi
+
+          if git ls-remote --exit-code origin "refs/heads/release/v${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Branch release/v${VERSION} already exists. Delete it before running this workflow again."
+            exit 1
+          fi
+
+          if git ls-remote --exit-code https://github.com/rawdreeg/homebrew-phpswitcher.git "refs/heads/release/v${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Tap branch release/v${VERSION} already exists on rawdreeg/homebrew-phpswitcher."
+            exit 1
+          fi
+
+      - name: Download existing release
+        if: ${{ inputs.sync_existing }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          curl -fsSL --retry 3 -o phpswitcher.tar.gz \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/phpswitcher.tar.gz"
+
+      - name: Run unit tests
+        if: ${{ !inputs.sync_existing }}
+        run: |
+          chmod +x tests/unit-tests.sh
+          ./tests/unit-tests.sh
+
+      - name: Set version in source
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          sed -i "s/^VERSION=\".*\"/VERSION=\"${VERSION}\"/" build.sh
+          sed -i "s/^PHPSWITCHER_VERSION_FALLBACK=\".*\"/PHPSWITCHER_VERSION_FALLBACK=\"${VERSION}\"/" bin/phpswitcher
+          grep -q "^VERSION=\"${VERSION}\"$" build.sh
+          grep -q "^PHPSWITCHER_VERSION_FALLBACK=\"${VERSION}\"$" bin/phpswitcher
+
       - name: Build artifact
+        if: ${{ !inputs.sync_existing }}
         run: |
           chmod +x build.sh
           ./build.sh
+
+      - name: Write checksum
+        env:
+          VERSION: ${{ inputs.version }}
+          SYNC_EXISTING: ${{ inputs.sync_existing }}
+        run: |
+          sha256sum phpswitcher.tar.gz > phpswitcher.tar.gz.sha256
+          actual=$(awk '{print $1}' phpswitcher.tar.gz.sha256)
+          if [ "$SYNC_EXISTING" = "true" ] && [ "$VERSION" = "0.5.0" ]; then
+            expected=5beacccc9e73005dae5770d49f0947de73e9d7093f2f04f45238b1a402df72a3
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::v0.5.0 asset sha256 is ${actual}, expected ${expected}"
+              exit 1
+            fi
+          fi
+          echo "RELEASE_SHA256=${actual}" >> "$GITHUB_ENV"
+
       - name: Verify artifact
+        if: ${{ !inputs.sync_existing }}
         run: |
           echo "Artifact contents:"
           tar -tzf phpswitcher.tar.gz
           echo ""
           echo "Artifact size: $(du -h phpswitcher.tar.gz | cut -f1)"
-      - name: Run unit tests against build
+          echo "Checksum:"
+          cat phpswitcher.tar.gz.sha256
+
+      - name: Update Homebrew formula
+        env:
+          VERSION: ${{ inputs.version }}
+          RELEASE_SHA256: ${{ env.RELEASE_SHA256 }}
         run: |
-          chmod +x tests/unit-tests.sh
-          ./tests/unit-tests.sh
+          python3 - << 'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          sha = os.environ["RELEASE_SHA256"].strip()
+          url = f"https://github.com/rawdreeg/phpswitcher/releases/download/v{version}/phpswitcher.tar.gz"
+          path = Path("Formula/phpswitcher.rb")
+          text = path.read_text()
+
+          def replace_once(pattern, value, source):
+              match = re.search(pattern, source, flags=re.M)
+              if match is None:
+                  raise SystemExit(f"formula is missing a line matching {pattern}")
+              return source[:match.start()] + value + source[match.end():]
+
+          text = replace_once(r'^(\s*)url "[^"]*"', f'  url "{url}"', text)
+          text = replace_once(r'^(\s*)version "[^"]*"', f'  version "{version}"', text)
+          text = replace_once(r'^(\s*)sha256 "[^"]*"', f'  sha256 "{sha}"', text)
+          path.write_text(text)
+          PY
+          grep -q "download/v${VERSION}/phpswitcher.tar.gz" Formula/phpswitcher.rb
+          grep -q "version \"${VERSION}\"" Formula/phpswitcher.rb
+          grep -q "sha256 \"${RELEASE_SHA256}\"" Formula/phpswitcher.rb
+
+      - name: Commit and push version updates
+        id: commit
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "release/v${VERSION}"
+          git add build.sh bin/phpswitcher Formula/phpswitcher.rb
+          if git diff --cached --quiet; then
+            echo "::error::Version files did not change."
+            exit 1
+          fi
+          git commit -m "chore: release v${VERSION}"
+          git push origin "HEAD:release/v${VERSION}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Create release
+        if: ${{ !inputs.sync_existing }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ inputs.version }}
           name: v${{ inputs.version }}
+          target_commitish: ${{ steps.commit.outputs.sha }}
           prerelease: ${{ inputs.prerelease }}
           generate_release_notes: true
-          files: phpswitcher.tar.gz
+          files: |
+            phpswitcher.tar.gz
+            phpswitcher.tar.gz.sha256
+
+      - name: Open version pull request
+        env:
+          VERSION: ${{ inputs.version }}
+          SYNC_EXISTING: ${{ inputs.sync_existing }}
+          RELEASE_SHA256: ${{ env.RELEASE_SHA256 }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "$SYNC_EXISTING" = "true" ]; then
+            note="Syncs the committed version to the existing v${VERSION} release. This run does not publish a new release."
+          else
+            note="Published tag v${VERSION} from this workflow run."
+          fi
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base develop \
+            --head "release/v${VERSION}" \
+            --title "chore: release v${VERSION}" \
+            --body "$(cat <<EOF
+          ## Release v${VERSION}
+
+          ${note}
+
+          - Formula URL: https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/phpswitcher.tar.gz
+          - sha256: \`${RELEASE_SHA256}\`
+
+          A matching pull request is opened on \`rawdreeg/homebrew-phpswitcher\`.
+          EOF
+          )"
+
+      - name: Open Homebrew tap pull request
+        env:
+          VERSION: ${{ inputs.version }}
+          RELEASE_SHA256: ${{ env.RELEASE_SHA256 }}
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          tap_dir=$(mktemp -d)
+          git clone --depth 1 https://github.com/rawdreeg/homebrew-phpswitcher.git "$tap_dir"
+          git -C "$tap_dir" checkout -b "release/v${VERSION}"
+          mkdir -p "$tap_dir/Formula"
+          cp Formula/phpswitcher.rb "$tap_dir/Formula/phpswitcher.rb"
+          git -C "$tap_dir" config user.name "github-actions[bot]"
+          git -C "$tap_dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$tap_dir" add Formula/phpswitcher.rb
+          if git -C "$tap_dir" diff --cached --quiet; then
+            echo "::error::Homebrew tap formula did not change."
+            exit 1
+          fi
+          git -C "$tap_dir" commit -m "chore: release v${VERSION}"
+          # gh's credential helper authenticates the push without putting the token in the remote URL.
+          export GH_TOKEN="$TAP_GITHUB_TOKEN"
+          gh auth setup-git
+          git -C "$tap_dir" push origin "HEAD:release/v${VERSION}"
+          gh pr create \
+            --repo rawdreeg/homebrew-phpswitcher \
+            --base main \
+            --head "release/v${VERSION}" \
+            --title "chore: release v${VERSION}" \
+            --body "$(cat <<EOF
+          ## Release v${VERSION}
+
+          Point the tap at the published phpswitcher archive.
+
+          - URL: https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/phpswitcher.tar.gz
+          - sha256: \`${RELEASE_SHA256}\`
+          EOF
+          )"

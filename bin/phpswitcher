@@ -311,39 +311,80 @@ command_version() {
     echo "phpswitcher version $(resolve_version)"
 }
 
+# Verify phpswitcher.tar.gz against phpswitcher.tar.gz.sha256 in the same directory.
+# The checksum file is a sha256sum line: "<hash>  phpswitcher.tar.gz".
+# Keep this in sync with verify_archive_checksum in install.sh.
+verify_archive_checksum() {
+    local dir="$1"
+
+    if [ ! -f "$dir/phpswitcher.tar.gz" ] || [ ! -f "$dir/phpswitcher.tar.gz.sha256" ]; then
+        echo_error "Checksum file not found. Refusing to extract."
+        return 1
+    fi
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        (cd "$dir" && sha256sum -c phpswitcher.tar.gz.sha256)
+        return $?
+    fi
+    if command -v shasum >/dev/null 2>&1; then
+        (cd "$dir" && shasum -a 256 -c phpswitcher.tar.gz.sha256)
+        return $?
+    fi
+
+    echo_error "sha256sum or shasum is required to verify the download."
+    return 1
+}
+
 command_self_update() {
     echo_message "Checking for the latest version..."
 
-    # 1. Fetch the latest release artifact URL
+    # 1. Fetch the latest release artifact URL. Anchor on the closing quote so the
+    # checksum asset (phpswitcher.tar.gz.sha256) is not selected.
     local artifact_url
-    artifact_url=$(curl -s --max-time 10 https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'browser_download_url.*phpswitcher\.tar\.gz' | cut -d '"' -f 4)
+    artifact_url=$(curl -s --max-time 10 https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep -E 'browser_download_url.*/phpswitcher\.tar\.gz"' | head -n 1 | cut -d '"' -f 4)
 
     if [ -z "$artifact_url" ]; then
         echo_error "Could not find the latest release artifact URL. The update failed."
         exit 1
     fi
 
-    local tmp_file
-    tmp_file=$(mktemp "${TMPDIR:-/tmp}/phpswitcher.XXXXXXXXXX.tar.gz")
+    local tmp_dir tmp_file checksum_url
+    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/phpswitcher.XXXXXXXXXX")
+    tmp_file="$tmp_dir/phpswitcher.tar.gz"
+    checksum_url="${artifact_url}.sha256"
 
-    # 2. Download the artifact
+    # 2. Download the artifact and its checksum. Do not extract until they match.
     echo_message "Downloading the latest version..."
     if ! curl -L --fail --max-time 120 --progress-bar -o "$tmp_file" "$artifact_url"; then
         echo_error "Failed to download the latest version. Please try again later."
-        rm -f "$tmp_file" # Clean up partial download
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    echo_message "Downloading checksum..."
+    if ! curl -fsSL --max-time 60 -o "$tmp_dir/phpswitcher.tar.gz.sha256" "$checksum_url"; then
+        echo_error "Failed to download checksum from $checksum_url. Refusing to extract."
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    echo_message "Verifying checksum..."
+    if ! verify_archive_checksum "$tmp_dir"; then
+        echo_error "Checksum verification failed. Refusing to extract."
+        rm -rf "$tmp_dir"
         exit 1
     fi
 
     # 3. Extract the artifact
     echo_message "Installing the latest version..."
     if tar -xzf "$tmp_file" -C "$PHPSWITCHER_DIR" --strip-components=1; then
-        rm -f "$tmp_file" # Clean up downloaded tarball
+        rm -rf "$tmp_dir"
         echo_message "phpswitcher has been updated successfully!"
         # Display the new version
         command_version
     else
         echo_error "Failed to extract the new version. The update failed."
-        rm -f "$tmp_file"
+        rm -rf "$tmp_dir"
         exit 1
     fi
 }
@@ -510,12 +551,19 @@ command_use_linux() {
     echo_message "PHP $requested_version is installed."
 
     # 2. Switch php and the related build tools in one sudo invocation.
-    local alt_script tool tool_bin sudo_args
+    local alt_script tool tool_bin sudo_args fpm_bin
     alt_script="set -e; update-alternatives --set php $(printf '%q' "$target_php_binary")"
-    for tool in phpize php-config phar phpdbg; do
+    for tool in phpize php-config phar phar.phar phpdbg; do
         tool_bin="/usr/bin/${tool}${requested_version}"
         if [ -e "$tool_bin" ]; then
             alt_script+="; update-alternatives --set $(printf '%q' "$tool") $(printf '%q' "$tool_bin") || true"
+        fi
+    done
+    # php-fpm is the unversioned alternative. Versioned units (php8.1-fpm) stay as they are.
+    for fpm_bin in "/usr/sbin/php-fpm${requested_version}" "/usr/bin/php-fpm${requested_version}"; do
+        if [ -e "$fpm_bin" ]; then
+            alt_script+="; update-alternatives --set php-fpm $(printf '%q' "$fpm_bin") || true"
+            break
         fi
     done
 
@@ -918,6 +966,45 @@ command_extensions_list() {
     fi
 }
 
+# Extension package names are appended to apt package names and passed to pecl.
+require_extension_name() {
+    local extension="$1"
+    local action="$2"
+
+    if [ -z "$extension" ]; then
+        echo_error "Please specify an extension to ${action}."
+        echo "Usage: phpswitcher extensions ${action} <extension> [<version>]"
+        exit 1
+    fi
+    if ! [[ "$extension" =~ ^[A-Za-z0-9_]+$ ]]; then
+        echo_error "Invalid extension name: \"$extension\"."
+        exit 1
+    fi
+}
+
+# Print the X.Y version to use. Reads the active version when the argument is empty.
+resolve_extensions_version() {
+    local requested_version="${1:-}"
+    local usage="$2"
+
+    if [ -z "$requested_version" ]; then
+        local active_version_file="$PHPSWITCHER_DIR/active_version"
+        if [ -f "$active_version_file" ]; then
+            requested_version=$(cat "$active_version_file")
+        fi
+        if [ -z "$requested_version" ]; then
+            echo_error "Could not determine PHP version. Please specify: $usage"
+            exit 1
+        fi
+        echo_message "Using active PHP version $requested_version."
+    fi
+    if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo_error "Invalid version format: \"$requested_version\". Please use format X.Y (e.g., 7.4, 8.1)."
+        exit 1
+    fi
+    printf '%s\n' "$requested_version"
+}
+
 command_extensions_install() {
     local extension="$1"
     local requested_version="$2"
@@ -948,36 +1035,53 @@ command_extensions_install() {
     fi
 }
 
+command_extensions_uninstall() {
+    local extension="$1"
+    local requested_version="$2"
+
+    if [ "$OS" = "macos" ]; then
+        echo_message "Removing $extension for PHP $requested_version via PECL..."
+        local pecl_bin
+        pecl_bin="$(brew --prefix)/opt/php@$requested_version/bin/pecl"
+        if [ ! -x "$pecl_bin" ]; then
+            echo_error "PECL not found for PHP $requested_version. Is it installed?"
+            exit 1
+        fi
+        if "$pecl_bin" uninstall "$extension"; then
+            echo_message "Extension $extension removed successfully for PHP $requested_version."
+        else
+            echo_error "Failed to remove extension $extension."
+            exit 1
+        fi
+    elif [ "$OS" = "linux" ]; then
+        local target_package="php${requested_version}-${extension}"
+        echo_message "Removing $target_package via apt..."
+        if sudo apt-get remove -y "$target_package"; then
+            echo_message "Extension $extension removed successfully for PHP $requested_version."
+        else
+            echo_error "Failed to remove $target_package."
+            exit 1
+        fi
+    fi
+}
+
 command_extensions() {
     local subcommand="${1:-}"
     shift || true
 
     case "$subcommand" in
-        install)
+        install|uninstall)
             local extension="${1:-}"
-            if [ -z "$extension" ]; then
-                echo_error "Please specify an extension to install."
-                echo "Usage: phpswitcher extensions install <extension> [<version>]"
-                exit 1
-            fi
+            require_extension_name "$extension" "$subcommand"
             local requested_version="${2:-}"
-            if [ -z "$requested_version" ]; then
-                # Try to detect or use active version
-                local active_version_file="$PHPSWITCHER_DIR/active_version"
-                if [ -f "$active_version_file" ]; then
-                    requested_version=$(cat "$active_version_file")
-                fi
-                if [ -z "$requested_version" ]; then
-                    echo_error "Could not determine PHP version. Please specify: phpswitcher extensions install <extension> <version>"
-                    exit 1
-                fi
-                echo_message "Using active PHP version $requested_version."
-            fi
-            if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
-                echo_error "Invalid version format: \"$requested_version\". Please use format X.Y (e.g., 7.4, 8.1)."
+            if ! requested_version=$(resolve_extensions_version "$requested_version" "phpswitcher extensions ${subcommand} <extension> <version>"); then
                 exit 1
             fi
-            command_extensions_install "$extension" "$requested_version"
+            if [ "$subcommand" = "install" ]; then
+                command_extensions_install "$extension" "$requested_version"
+            else
+                command_extensions_uninstall "$extension" "$requested_version"
+            fi
             ;;
         ""|list)
             # If subcommand is "list", shift and get version; if empty, get version from $1
@@ -1007,6 +1111,7 @@ command_extensions() {
                 echo_error "Unknown extensions subcommand: $subcommand"
                 echo "Usage: phpswitcher extensions [list] [<version>]"
                 echo "       phpswitcher extensions install <extension> [<version>]"
+                echo "       phpswitcher extensions uninstall <extension> [<version>]"
                 exit 1
             fi
             ;;
@@ -1034,6 +1139,8 @@ command_help() {
     echo "  extensions [<version>] List installed PHP extensions for a version."
     echo "  extensions install <ext> [<version>]"
     echo "                         Install a PHP extension (e.g., xdebug)."
+    echo "  extensions uninstall <ext> [<version>]"
+    echo "                         Remove a PHP extension (e.g., xdebug)."
     echo "  self-update            Update phpswitcher to the latest version."
     echo "  version                Show the currently installed version of phpswitcher."
     echo "  help                   Show this help message."
@@ -1051,6 +1158,7 @@ command_help() {
     echo "  phpswitcher status"
     echo "  phpswitcher extensions 8.1"
     echo "  phpswitcher extensions install xdebug"
+    echo "  phpswitcher extensions uninstall xdebug"
     echo "  phpswitcher self-update"
     echo "  phpswitcher version"
 }
