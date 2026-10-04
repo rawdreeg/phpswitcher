@@ -2,10 +2,19 @@
 
 # Helper: get installed PHP versions
 function __phpswitcher_installed_versions
+    # Version names for completion only. Family choice lives in
+    # detect_linux_family inside bin/phpswitcher, which Bash and Fish both call.
     if command -q brew
         brew list --formula 2>/dev/null | string match -r '^php@(.+)' | string replace -r '^php@' ''
     else if command -q update-alternatives
         update-alternatives --list php 2>/dev/null | string match -r '[0-9]+\.[0-9]+$'
+    else
+        for bin in /usr/bin/php[0-9][0-9]
+            if test -x "$bin"
+                set -l suffix (string replace -r '^.*/php' '' -- $bin)
+                echo (string sub -l 1 -- $suffix).(string sub -s 2 -- $suffix)
+            end
+        end
     end
 end
 

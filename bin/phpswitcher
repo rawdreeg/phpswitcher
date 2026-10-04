@@ -6,7 +6,7 @@ set -e
 export PHPSWITCHER_DIR="${PHPSWITCHER_DIR:-$HOME/.phpswitcher}"
 
 # Used when no VERSION file is installed (Composer checkouts, local git).
-PHPSWITCHER_VERSION_FALLBACK="0.5.0-dev"
+PHPSWITCHER_VERSION_FALLBACK="0.5.0"
 
 # Helper functions for printing messages
 echo_message() {
@@ -128,9 +128,17 @@ detect_os() {
 }
 
 # Single Linux family check. Bash, Zsh, and Fish hooks call this CLI
-# (status / use), so they cannot grow a second Fedora-vs-Debian decision.
+# (status / use), so they cannot grow a second Fedora, Arch, or Debian decision.
+# Fedora is ID=fedora, or dnf when the release is not already a Debian-family system.
+# Arch is ID or ID_LIKE arch (or archlinux), including derivatives such as Manjaro.
+# Debian and Ubuntu stay on apt even when pacman or dnf is also installed.
+# pacman is the fallback when os-release does not name a family.
 os_release_file() {
-    printf '%s\n' "${PHPSWITCHER_OS_RELEASE:-/etc/os-release}"
+    if [ -n "${PHPSWITCHER_OS_RELEASE+x}" ]; then
+        printf '%s\n' "$PHPSWITCHER_OS_RELEASE"
+    else
+        printf '%s\n' /etc/os-release
+    fi
 }
 
 # Print one unquoted os-release value. Returns 1 when the key is absent.
@@ -159,9 +167,7 @@ os_release_value() {
     return 1
 }
 
-# Print "fedora" or "debian".
-# Fedora is ID=fedora, or dnf on a system that is not already Debian-family.
-# Debian and Ubuntu stay on apt. Other Enterprise Linux IDs keep that apt path.
+# Print fedora, arch, or debian.
 detect_linux_family() {
     local file id id_like
     file=$(os_release_file)
@@ -179,6 +185,13 @@ detect_linux_family() {
             ;;
     esac
 
+    case " ${id} ${id_like} " in
+        *" arch "*|*" archlinux "*)
+            printf 'arch\n'
+            return 0
+            ;;
+    esac
+
     case " ${id_like} " in
         *" debian "*|*" ubuntu "*)
             printf 'debian\n'
@@ -186,8 +199,14 @@ detect_linux_family() {
             ;;
     esac
 
+    # dnf selects Fedora only when this is not already a Debian-family system.
     if command -v dnf >/dev/null 2>&1 && ! command -v apt-get >/dev/null 2>&1; then
         printf 'fedora\n'
+        return 0
+    fi
+
+    if command -v pacman >/dev/null 2>&1; then
+        printf 'arch\n'
         return 0
     fi
 
@@ -196,6 +215,486 @@ detect_linux_family() {
 
 linux_is_fedora() {
     [ "$(detect_linux_family)" = "fedora" ]
+}
+
+linux_is_arch() {
+    [ "$(detect_linux_family)" = "arch" ]
+}
+
+# AUR phpXY packages install versioned binaries in /usr/bin (php81, not php8.1).
+# PHPSWITCHER_ARCH_BIN_DIR overrides that directory for tests.
+arch_bin_dir() {
+    if [ -n "${PHPSWITCHER_ARCH_BIN_DIR:-}" ]; then
+        printf '%s\n' "$PHPSWITCHER_ARCH_BIN_DIR"
+    else
+        printf '%s\n' /usr/bin
+    fi
+}
+
+# 8.1 -> 81. AUR package bases are php74, php80, php81, php82, php83, php84, php85.
+arch_suffix_for_version() {
+    local version="$1"
+    local major minor
+
+    major=${version%%.*}
+    minor=${version#*.}
+    if [ "${#major}" -ne 1 ] || [ "${#minor}" -ne 1 ]; then
+        echo_error "Arch AUR packages are named phpXY for a single-digit X.Y version (for example php81 for 8.1). \"$version\" does not match that layout."
+        return 1
+    fi
+    printf '%s%s\n' "$major" "$minor"
+}
+
+arch_version_from_suffix() {
+    local suffix="$1"
+
+    if [[ ! "$suffix" =~ ^[0-9][0-9]$ ]]; then
+        return 1
+    fi
+    printf '%s.%s\n' "${suffix:0:1}" "${suffix:1:1}"
+}
+
+# tool php|phpize|php-config|phar|phar.phar|phpdbg|php-fpm and a two-digit suffix.
+arch_versioned_bin() {
+    local tool="$1"
+    local suffix="$2"
+    local bin_dir
+
+    bin_dir=$(arch_bin_dir)
+    case "$tool" in
+        php)
+            printf '%s/php%s\n' "$bin_dir" "$suffix"
+            ;;
+        php-fpm)
+            printf '%s/php-fpm%s\n' "$bin_dir" "$suffix"
+            ;;
+        phar.phar)
+            printf '%s/phar.phar%s\n' "$bin_dir" "$suffix"
+            ;;
+        phpize|php-config|phar|phpdbg)
+            printf '%s/%s%s\n' "$bin_dir" "$tool" "$suffix"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+arch_require_version() {
+    local requested_version="$1"
+    local usage="$2"
+
+    if [ -z "$requested_version" ]; then
+        echo_message "Version argument missing, attempting auto-detection..."
+        if ! requested_version=$(detect_version); then
+            echo_error "PHP version not specified and could not be detected automatically."
+            echo "$usage" >&2
+            return 1
+        fi
+    fi
+
+    if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo_error "Invalid version format: \"$requested_version\". Please use format X.Y (e.g., 7.4, 8.1)."
+        return 1
+    fi
+
+    printf '%s\n' "$requested_version"
+}
+
+# paru is preferred when both helpers are installed. pacman cannot build AUR packages.
+arch_aur_helper() {
+    if command -v paru >/dev/null 2>&1; then
+        printf '%s\n' paru
+        return 0
+    fi
+    if command -v yay >/dev/null 2>&1; then
+        printf '%s\n' yay
+        return 0
+    fi
+
+    echo_error "pacman cannot install AUR packages."
+    echo_error "Side-by-side PHP versions on Arch are AUR packages such as php81 and php81-cli."
+    echo_error "Install paru or yay, then retry."
+    return 1
+}
+
+# Quiet mode passes --sudoflags=-n so paru/yay cannot stop on a password prompt.
+arch_run_aur_install() {
+    local helper="$1"
+    shift
+    local -a cmd
+
+    cmd=("$helper" -S --needed --noconfirm "$@")
+    if [ "$PHPSWITCHER_QUIET" = "true" ]; then
+        if ! sudo -n true >/dev/null 2>&1; then
+            echo_error "Could not install packages without a password. Run the command again without --quiet."
+            return 1
+        fi
+        cmd+=(--sudoflags=-n)
+    fi
+    "${cmd[@]}" || return $?
+}
+
+arch_run_pacman() {
+    if [ "$PHPSWITCHER_QUIET" = "true" ]; then
+        if ! sudo -n true >/dev/null 2>&1; then
+            echo_error "Could not run pacman without a password. Run the command again without --quiet."
+            return 1
+        fi
+        sudo -n pacman "$@" || return $?
+        return 0
+    fi
+    sudo pacman "$@" || return $?
+}
+
+arch_active_version() {
+    local link target base
+
+    link="$PHPSWITCHER_DIR/bin/php"
+    if [ ! -L "$link" ]; then
+        return 1
+    fi
+    target=$(readlink "$link" 2>/dev/null || true)
+    if [ -z "$target" ]; then
+        return 1
+    fi
+    base=$(basename "$target")
+    if [[ "$base" =~ ^php([0-9])([0-9])$ ]]; then
+        printf '%s.%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+        return 0
+    fi
+    return 1
+}
+
+arch_version_present() {
+    local suffix="$1"
+    local bin
+
+    bin=$(arch_versioned_bin php "$suffix")
+    if [ -x "$bin" ]; then
+        return 0
+    fi
+    if ! command -v pacman >/dev/null 2>&1; then
+        return 1
+    fi
+    if pacman -Q "php${suffix}" >/dev/null 2>&1; then
+        return 0
+    fi
+    if pacman -Q "php${suffix}-cli" >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+# php81 and php81-* (cli, extensions, fpm). Not php810.
+arch_packages_for_suffix() {
+    local suffix="$1"
+    local line
+
+    if ! command -v pacman >/dev/null 2>&1; then
+        return 0
+    fi
+    while IFS= read -r line; do
+        case "$line" in
+            "php${suffix}"|"php${suffix}-"*)
+                printf '%s\n' "$line"
+                ;;
+        esac
+    done < <(pacman -Qq 2>/dev/null || true)
+}
+
+arch_known_versions() {
+    local suffix version bin_dir bin base line
+
+    bin_dir=$(arch_bin_dir)
+    if command -v pacman >/dev/null 2>&1; then
+        while IFS= read -r line; do
+            case "$line" in
+                php[0-9][0-9]|php[0-9][0-9]-cli)
+                    suffix=${line#php}
+                    suffix=${suffix%-cli}
+                    if version=$(arch_version_from_suffix "$suffix"); then
+                        printf '%s\n' "$version"
+                    fi
+                    ;;
+            esac
+        done < <(pacman -Qq 2>/dev/null || true)
+    fi
+
+    for bin in "$bin_dir"/php[0-9][0-9]; do
+        [ -x "$bin" ] || continue
+        base=$(basename "$bin")
+        suffix=${base#php}
+        if version=$(arch_version_from_suffix "$suffix"); then
+            printf '%s\n' "$version"
+        fi
+    done
+}
+
+arch_link_active_version() {
+    local version="$1"
+    local suffix tool bin dest
+
+    suffix=$(arch_suffix_for_version "$version") || return 1
+    bin=$(arch_versioned_bin php "$suffix")
+    if [ ! -x "$bin" ]; then
+        echo_error "Target PHP version $version does not appear to be installed at $bin."
+        echo "The AUR package php${suffix}-cli provides that binary. Run: phpswitcher install $version"
+        return 1
+    fi
+
+    mkdir -p "$PHPSWITCHER_DIR/bin"
+    if ! ln -sfn "$bin" "$PHPSWITCHER_DIR/bin/php"; then
+        echo_error "Failed to link $bin to $PHPSWITCHER_DIR/bin/php."
+        return 1
+    fi
+
+    for tool in phpize php-config phar phar.phar phpdbg php-fpm; do
+        bin=$(arch_versioned_bin "$tool" "$suffix")
+        dest="$PHPSWITCHER_DIR/bin/$tool"
+        if [ -e "$bin" ]; then
+            ln -sfn "$bin" "$dest"
+        elif [ -L "$dest" ]; then
+            rm -f "$dest"
+        fi
+    done
+
+    mkdir -p "$PHPSWITCHER_DIR"
+    printf '%s\n' "$version" > "$PHPSWITCHER_DIR/active_version"
+}
+
+arch_remove_links_for_suffix() {
+    local suffix="$1"
+    local tool dest target expected
+
+    for tool in php phpize php-config phar phar.phar phpdbg php-fpm; do
+        dest="$PHPSWITCHER_DIR/bin/$tool"
+        [ -L "$dest" ] || continue
+        target=$(readlink "$dest" 2>/dev/null || true)
+        expected=$(arch_versioned_bin "$tool" "$suffix")
+        if [ "$target" = "$expected" ]; then
+            rm -f "$dest"
+        fi
+    done
+}
+
+command_list_arch() {
+    local versions active version
+
+    echo_message "Installed PHP Versions (via pacman):"
+    if ! command -v pacman >/dev/null 2>&1; then
+        echo_error "The 'pacman' command is not available on this system."
+        exit 1
+    fi
+
+    versions=$(arch_known_versions | sort -u)
+    active=$(arch_active_version || true)
+    if [ -z "$versions" ]; then
+        echo "No side-by-side PHP versions found."
+        echo "Arch's official php package is unversioned. Selectable versions are AUR packages such as php81, with the CLI binary from php81-cli at /usr/bin/php81."
+        return 0
+    fi
+
+    while IFS= read -r version; do
+        [ -n "$version" ] || continue
+        if [ "$version" = "$active" ]; then
+            echo " * $version (active)"
+        else
+            echo "   $version"
+        fi
+    done <<< "$versions"
+}
+
+command_use_arch() {
+    local requested_version="$1"
+
+    if ! requested_version=$(arch_require_version "$requested_version" "Usage: phpswitcher use [<version>]"); then
+        exit 1
+    fi
+
+    echo_message "Attempting to switch to PHP $requested_version..."
+    if ! arch_link_active_version "$requested_version"; then
+        exit 1
+    fi
+
+    case ":$PATH:" in
+        *":$PHPSWITCHER_DIR/bin:"*) ;;
+        *)
+            echo_message "Add $PHPSWITCHER_DIR/bin to the front of PATH so 'php' uses the selected version."
+            ;;
+    esac
+
+    echo_message "Successfully switched to PHP $requested_version!"
+    echo_message "Run 'php --version' to verify."
+}
+
+command_install_arch() {
+    local requested_version="$1"
+    local suffix base_pkg cli_pkg helper cli_bin
+
+    if ! requested_version=$(arch_require_version "$requested_version" "Usage: phpswitcher install [<version>]"); then
+        exit 1
+    fi
+    if ! suffix=$(arch_suffix_for_version "$requested_version"); then
+        exit 1
+    fi
+
+    base_pkg="php${suffix}"
+    cli_pkg="php${suffix}-cli"
+    echo_message "Attempting to install $base_pkg and $cli_pkg..."
+    if ! helper=$(arch_aur_helper); then
+        echo_error "Could not install $base_pkg and $cli_pkg."
+        exit 1
+    fi
+
+    echo_message "Installing $base_pkg and $cli_pkg via $helper..."
+    if ! arch_run_aur_install "$helper" "$base_pkg" "$cli_pkg"; then
+        echo_error "Failed to install $base_pkg and $cli_pkg via $helper."
+        exit 1
+    fi
+
+    cli_bin=$(arch_versioned_bin php "$suffix")
+    if [ ! -x "$cli_bin" ]; then
+        echo_error "PHP $requested_version packages were installed but the CLI binary is missing: $cli_bin"
+        echo "The $cli_pkg package provides that binary."
+        exit 1
+    fi
+    echo_message "$cli_pkg installed successfully!"
+
+    if [ "$PHPSWITCHER_QUIET" != "true" ] && [ -t 0 ]; then
+        read -p "Would you like to switch to PHP $requested_version now? (y/N) " -n 1 -r REPLY
+        echo
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            command_use "$requested_version"
+        fi
+    else
+        if [ "$PHPSWITCHER_QUIET" != "true" ]; then
+            echo_message "Non-interactive mode detected. Switching to PHP $requested_version automatically."
+        fi
+        command_use "$requested_version"
+    fi
+}
+
+command_uninstall_arch() {
+    local requested_version="$1"
+    local suffix active pkg_name
+    local -a pkgs=()
+
+    if [ -z "$requested_version" ]; then
+        echo_error "Please specify a PHP version to uninstall."
+        echo "Usage: phpswitcher uninstall <version>"
+        exit 1
+    fi
+    if ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo_error "Invalid version format: \"$requested_version\". Please use format X.Y (e.g., 7.4, 8.1)."
+        exit 1
+    fi
+    if ! suffix=$(arch_suffix_for_version "$requested_version"); then
+        exit 1
+    fi
+
+    active=$(arch_active_version || true)
+    if [ "$requested_version" = "$active" ]; then
+        echo_error "Cannot uninstall PHP $requested_version because it is the currently active version."
+        echo "Please switch to a different version first with: phpswitcher use <other-version>"
+        exit 1
+    fi
+
+    if ! arch_version_present "$suffix"; then
+        echo_error "PHP version $requested_version is not installed."
+        exit 1
+    fi
+
+    if [ "$PHPSWITCHER_QUIET" != "true" ] && [ -t 0 ]; then
+        read -p "Are you sure you want to uninstall PHP $requested_version? (y/N) " -n 1 -r REPLY
+        echo
+        if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
+            echo "Aborted."
+            return
+        fi
+    fi
+
+    while IFS= read -r pkg_name; do
+        [ -n "$pkg_name" ] || continue
+        pkgs+=("$pkg_name")
+    done < <(arch_packages_for_suffix "$suffix")
+
+    if [ "${#pkgs[@]}" -eq 0 ]; then
+        echo_error "PHP $requested_version was found but no pacman package php${suffix} is installed."
+        exit 1
+    fi
+
+    echo_message "Uninstalling ${pkgs[*]}..."
+    if ! arch_run_pacman -R --noconfirm "${pkgs[@]}"; then
+        echo_error "Failed to uninstall PHP $requested_version."
+        exit 1
+    fi
+    arch_remove_links_for_suffix "$suffix"
+    echo_message "PHP $requested_version has been uninstalled successfully."
+}
+
+command_extensions_list_arch() {
+    local requested_version="$1"
+    local suffix php_bin
+
+    if ! suffix=$(arch_suffix_for_version "$requested_version"); then
+        exit 1
+    fi
+    php_bin=$(arch_versioned_bin php "$suffix")
+    echo_message "Installed extensions for PHP $requested_version:"
+    if [ ! -x "$php_bin" ]; then
+        echo_error "PHP $requested_version does not appear to be installed at $php_bin."
+        exit 1
+    fi
+    "$php_bin" -m 2>/dev/null | tail -n +2
+}
+
+command_extensions_install_arch() {
+    local extension="$1"
+    local requested_version="$2"
+    local suffix pkg helper
+
+    if ! suffix=$(arch_suffix_for_version "$requested_version"); then
+        exit 1
+    fi
+    pkg="php${suffix}-${extension}"
+    if ! helper=$(arch_aur_helper); then
+        echo_error "Could not install $pkg."
+        exit 1
+    fi
+
+    echo_message "Installing $pkg via $helper..."
+    if ! arch_run_aur_install "$helper" "$pkg"; then
+        echo_error "Failed to install $pkg."
+        exit 1
+    fi
+    echo_message "Extension $extension installed successfully for PHP $requested_version."
+}
+
+command_extensions_uninstall_arch() {
+    local extension="$1"
+    local requested_version="$2"
+    local suffix pkg
+
+    if ! suffix=$(arch_suffix_for_version "$requested_version"); then
+        exit 1
+    fi
+    pkg="php${suffix}-${extension}"
+    if ! command -v pacman >/dev/null 2>&1; then
+        echo_error "The 'pacman' command is not available on this system."
+        exit 1
+    fi
+    if ! pacman -Q "$pkg" >/dev/null 2>&1; then
+        echo_error "Package $pkg is not installed."
+        exit 1
+    fi
+
+    echo_message "Removing $pkg via pacman..."
+    if ! arch_run_pacman -R --noconfirm "$pkg"; then
+        echo_error "Failed to remove $pkg."
+        exit 1
+    fi
+    echo_message "Extension $extension removed successfully for PHP $requested_version."
 }
 
 # --- Version Detection ---
@@ -919,6 +1418,10 @@ command_list_linux() {
         command_list_fedora
         return
     fi
+    if linux_is_arch; then
+        command_list_arch
+        return
+    fi
 
     echo_message "Installed PHP Versions (via update-alternatives):"
 
@@ -1185,6 +1688,10 @@ command_use_linux() {
         command_use_fedora "$@"
         return
     fi
+    if linux_is_arch; then
+        command_use_arch "$@"
+        return
+    fi
 
     local requested_version="$1"
 
@@ -1258,6 +1765,10 @@ command_use_linux() {
 command_install_linux() {
     if linux_is_fedora; then
         command_install_fedora "$@"
+        return
+    fi
+    if linux_is_arch; then
+        command_install_arch "$@"
         return
     fi
 
@@ -1392,6 +1903,10 @@ command_uninstall_macos() {
 command_uninstall_linux() {
     if linux_is_fedora; then
         command_uninstall_fedora "$@"
+        return
+    fi
+    if linux_is_arch; then
+        command_uninstall_arch "$@"
         return
     fi
 
@@ -1635,6 +2150,10 @@ command_extensions_list() {
             command_extensions_list_fedora "$requested_version"
             return
         fi
+        if linux_is_arch; then
+            command_extensions_list_arch "$requested_version"
+            return
+        fi
         echo_message "Installed extensions for PHP $requested_version:"
         local php_bin="/usr/bin/php$requested_version"
         if [ ! -x "$php_bin" ]; then
@@ -1707,6 +2226,10 @@ command_extensions_install() {
             command_extensions_install_fedora "$extension" "$requested_version"
             return
         fi
+        if linux_is_arch; then
+            command_extensions_install_arch "$extension" "$requested_version"
+            return
+        fi
         local target_package="php${requested_version}-${extension}"
         echo_message "Installing $target_package via apt..."
         if sudo apt-get install -y "$target_package"; then
@@ -1739,6 +2262,10 @@ command_extensions_uninstall() {
     elif [ "$OS" = "linux" ]; then
         if linux_is_fedora; then
             command_extensions_uninstall_fedora "$extension" "$requested_version"
+            return
+        fi
+        if linux_is_arch; then
+            command_extensions_uninstall_arch "$extension" "$requested_version"
             return
         fi
         local target_package="php${requested_version}-${extension}"
@@ -1839,6 +2366,9 @@ command_help() {
     echo "                    Binaries are /usr/bin/php81 and /opt/remi/php81/root/usr/bin/php."
     echo "                    Switching links php into \$PHPSWITCHER_DIR/bin. sudo installs packages."
     echo "                    Quiet mode uses sudo -n when an alternatives entry exists, and otherwise only writes the symlink."
+    echo "  - Linux (Arch): Uses AUR packages phpXY and phpXY-cli (for example php81 and php81-cli)."
+    echo "    The CLI binary is /usr/bin/phpXY. pacman cannot install AUR packages; paru (or yay) is required."
+    echo "    Switching links that binary from \$PHPSWITCHER_DIR/bin. It does not use update-alternatives."
     echo ""
     echo "Examples:"
     echo "  phpswitcher install 8.1"
