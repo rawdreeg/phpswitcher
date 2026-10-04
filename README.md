@@ -14,7 +14,7 @@ A simple CLI tool to manage multiple PHP versions on macOS and Linux.
 *   **Global default version** — set a fallback PHP version used when no project-level config is found.
 *   **Automatic version switching** when you change directories (supports `.php-version`, `composer.json`, and global default).
 *   **Status command** — see active PHP version, detection source, and path info at a glance.
-*   **Extensions management** — list or install PHP extensions for any version.
+*   **Extensions management** — list, install, or remove PHP extensions for any version.
 *   **Tab completion** for Bash, Zsh, and Fish.
 
 ## Prerequisites
@@ -102,6 +102,8 @@ cd my-project-using-php7.4/
 phpswitcher use
 ```
 
+On Linux, `use` also switches `phpize`, `php-config`, `phar`, `phar.phar`, `phpdbg`, and `php-fpm` when those binaries are installed. Versioned FPM services such as `php8.1-fpm` are left running; the `php-fpm` alternative only moves the unversioned binary.
+
 **Set a global default PHP version:**
 
 Set a fallback version that's used when no `.php-version` file or `composer.json` is found in the directory tree:
@@ -144,7 +146,7 @@ phpswitcher status
 
 **Manage PHP extensions:**
 
-List installed extensions for a PHP version, or install new ones:
+List installed extensions for a PHP version, or install and remove them:
 
 ```bash
 # List extensions for the active PHP version:
@@ -158,9 +160,15 @@ phpswitcher extensions install xdebug
 
 # Install an extension for a specific version:
 phpswitcher extensions install redis 8.1
+
+# Remove an extension (uses active version):
+phpswitcher extensions uninstall xdebug
+
+# Remove an extension for a specific version:
+phpswitcher extensions uninstall redis 8.1
 ```
 
-On Linux, extensions are installed via `apt` (e.g., `php8.1-xdebug`). On macOS, PECL is used.
+On Linux, extensions are installed and removed via `apt` (e.g., `php8.1-xdebug`). On macOS, PECL is used.
 
 **Show Version:**
 
@@ -173,7 +181,7 @@ phpswitcher version
 ```bash
 phpswitcher self-update
 ```
-This will fetch and install the latest version of `phpswitcher` from GitHub.
+This will fetch and install the latest version of `phpswitcher` from GitHub. The tarball is checked against the published checksum before it is extracted.
 
 **Check active PHP version (after switching):**
 

@@ -130,8 +130,34 @@ FISH_EOF
   PROFILE_FILE="$profile_file"
 }
 
+# Verify phpswitcher.tar.gz against phpswitcher.tar.gz.sha256 in the same directory.
+# The checksum file is a sha256sum line: "<hash>  phpswitcher.tar.gz".
+# Keep this in sync with verify_archive_checksum in bin/phpswitcher.
+verify_archive_checksum() {
+  local dir="$1"
+
+  if [ ! -f "$dir/phpswitcher.tar.gz" ] || [ ! -f "$dir/phpswitcher.tar.gz.sha256" ]; then
+    echo_error "Checksum file not found. Refusing to extract."
+    return 1
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    (cd "$dir" && sha256sum -c phpswitcher.tar.gz.sha256)
+    return $?
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    (cd "$dir" && shasum -a 256 -c phpswitcher.tar.gz.sha256)
+    return $?
+  fi
+
+  echo_error "sha256sum or shasum is required to verify the download."
+  return 1
+}
+
 install_artifact() {
-  local artifact_url="https://github.com/rawdreeg/phpswitcher/releases/latest/download/phpswitcher.tar.gz"
+  local artifact_url="${PHPSWITCHER_ARTIFACT_URL:-https://github.com/rawdreeg/phpswitcher/releases/latest/download/phpswitcher.tar.gz}"
+  local checksum_url="${PHPSWITCHER_CHECKSUM_URL:-${artifact_url}.sha256}"
+  local tmp_dir
   local tmp_file
 
   echo_message "Checking dependencies..."
@@ -151,14 +177,29 @@ install_artifact() {
   echo_message "Downloading phpswitcher artifact..."
 
   mkdir -p "$INSTALL_DIR"
-  tmp_file=$(mktemp "${TMPDIR:-/tmp}/phpswitcher.XXXXXXXXXX.tar.gz")
+  tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/phpswitcher.XXXXXXXXXX")
+  tmp_file="$tmp_dir/phpswitcher.tar.gz"
 
   echo "Downloading from: $artifact_url"
   if curl -L --fail --max-time 120 --progress-bar -o "$tmp_file" "$artifact_url"; then
     echo "Download successful."
   else
     echo_error "Failed to download artifact from $artifact_url"
-    rm -f "$tmp_file"
+    rm -rf "$tmp_dir"
+    exit 1
+  fi
+
+  echo_message "Downloading checksum..."
+  if ! curl -fsSL --max-time 60 -o "$tmp_dir/phpswitcher.tar.gz.sha256" "$checksum_url"; then
+    echo_error "Failed to download checksum from $checksum_url. Refusing to extract."
+    rm -rf "$tmp_dir"
+    exit 1
+  fi
+
+  echo_message "Verifying checksum..."
+  if ! verify_archive_checksum "$tmp_dir"; then
+    echo_error "Checksum verification failed. Refusing to extract."
+    rm -rf "$tmp_dir"
     exit 1
   fi
 
@@ -166,10 +207,10 @@ install_artifact() {
   # Use --strip-components=1 as the archive contains a top-level directory like phpswitcher-X.Y.Z/
   if tar -xzf "$tmp_file" -C "$INSTALL_DIR" --strip-components=1; then
     echo "Extraction successful."
-    rm -f "$tmp_file"
+    rm -rf "$tmp_dir"
   else
     echo_error "Failed to extract artifact $tmp_file"
-    rm -f "$tmp_file"
+    rm -rf "$tmp_dir"
     exit 1
   fi
 }

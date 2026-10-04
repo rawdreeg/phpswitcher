@@ -64,7 +64,9 @@ assert_contains() {
     local string="$1"
     local substring="$2"
     local message="$3"
-    if echo "$string" | grep -qF -- "$substring"; then
+    # A here-string avoids a pipe. grep -q exits early, and pipefail would
+    # treat the resulting SIGPIPE as a failed match on a long string.
+    if grep -qF -- "$substring" <<< "$string"; then
         report_success "$message"
     else
         report_failure "$message"
@@ -77,7 +79,7 @@ assert_not_contains() {
     local string="$1"
     local substring="$2"
     local message="$3"
-    if ! echo "$string" | grep -qF -- "$substring"; then
+    if ! grep -qF -- "$substring" <<< "$string"; then
         report_success "$message"
     else
         report_failure "$message"
@@ -408,6 +410,64 @@ test_extensions_list_subcommand() {
     teardown
 }
 
+test_extensions_install_invalid_name() {
+    setup
+    test_case "extensions install: rejects an unsafe extension name"
+    local output
+    output=$("$PHPSWITCHER" extensions install '../evil' 2>&1 || true)
+    assert_contains "$output" "Invalid extension name" "Rejects a path-like name"
+    teardown
+}
+
+test_extensions_uninstall_no_extension() {
+    setup
+    test_case "extensions uninstall: errors when no extension specified"
+    local output
+    output=$("$PHPSWITCHER" extensions uninstall 2>&1 || true)
+    assert_contains "$output" "Please specify an extension to uninstall" "Error for missing extension"
+    teardown
+}
+
+test_extensions_uninstall_no_version() {
+    setup
+    test_case "extensions uninstall: errors when no version and no active version"
+    local output
+    output=$("$PHPSWITCHER" extensions uninstall xdebug 2>&1 || true)
+    assert_contains "$output" "Could not determine PHP version" "Error for missing version"
+    teardown
+}
+
+test_extensions_uninstall_invalid_version() {
+    setup
+    test_case "extensions uninstall: rejects invalid version format"
+    local output
+    output=$("$PHPSWITCHER" extensions uninstall xdebug "bad" 2>&1 || true)
+    assert_contains "$output" "Invalid version format" "Rejects 'bad'"
+    teardown
+}
+
+test_extensions_uninstall_invalid_name() {
+    setup
+    test_case "extensions uninstall: rejects an unsafe extension name"
+    local output
+    output=$("$PHPSWITCHER" extensions uninstall 'xdebug;rm' 2>&1 || true)
+    assert_contains "$output" "Invalid extension name" "Rejects a name with a shell metacharacter"
+    teardown
+}
+
+test_extensions_uninstall_uses_active() {
+    setup
+    echo "8.1" > "$PHPSWITCHER_DIR/active_version"
+
+    test_case "extensions uninstall: picks up active version (message check)"
+    # Stop before apt/pecl can block. The active-version line is printed first.
+    local output
+    output=$(timeout 5 "$PHPSWITCHER" extensions uninstall xdebug 2>&1 || true)
+    assert_contains "$output" "Using active PHP version 8.1" "References active version 8.1"
+    assert_contains "$output" "8.1" "Mentions PHP 8.1"
+    teardown
+}
+
 # =============================================
 # VERSION DETECTION FALLBACK TESTS
 # =============================================
@@ -514,6 +574,7 @@ test_help_includes_new_commands() {
     assert_contains "$output" "phpswitcher default 8.2" "Help has default example"
     assert_contains "$output" "phpswitcher status" "Help has status example"
     assert_contains "$output" "phpswitcher extensions" "Help has extensions example"
+    assert_contains "$output" "extensions uninstall" "Help has extensions uninstall"
     teardown
 }
 
@@ -614,6 +675,7 @@ test_fish_completion_contents() {
     assert_contains "$content" "status" "Has status"
     assert_contains "$content" "extensions" "Has extensions"
     assert_contains "$content" "self-update" "Has self-update"
+    assert_contains "$content" "Remove an extension" "Offers extensions uninstall"
 }
 
 # =============================================
@@ -627,7 +689,85 @@ test_completion_commands_list() {
     assert_contains "$content" "default" "Completion has default"
     assert_contains "$content" "status" "Completion has status"
     assert_contains "$content" "extensions" "Completion has extensions"
-    assert_contains "$content" "list install" "Bash completion offers extensions subcommands"
+    assert_contains "$content" "list install uninstall" "Bash completion offers extensions subcommands"
+}
+
+test_linux_switch_includes_fpm() {
+    test_case "linux switch: sets phar.phar and php-fpm when present"
+    local content
+    content=$(cat "$SCRIPT_DIR/bin/phpswitcher")
+    assert_contains "$content" "phar.phar" "Switches phar.phar"
+    assert_contains "$content" "php-fpm" "Switches php-fpm"
+    assert_contains "$content" "/usr/sbin/php-fpm" "Looks for the sbin php-fpm binary"
+}
+
+test_checksum_scripts_refuse_without_match() {
+    test_case "checksum: install and self-update verify before extract"
+    local install_sh phps
+    install_sh=$(cat "$SCRIPT_DIR/install.sh")
+    phps=$(cat "$SCRIPT_DIR/bin/phpswitcher")
+    assert_contains "$install_sh" "sha256sum -c phpswitcher.tar.gz.sha256" "Installer uses sha256sum -c"
+    assert_contains "$phps" "sha256sum -c phpswitcher.tar.gz.sha256" "self-update uses sha256sum -c"
+    assert_contains "$install_sh" "Refusing to extract" "Installer refuses a bad download"
+    assert_contains "$phps" "Refusing to extract" "self-update refuses a bad download"
+}
+
+write_archive_checksum() {
+    local dir="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        (cd "$dir" && sha256sum phpswitcher.tar.gz > phpswitcher.tar.gz.sha256)
+    else
+        (cd "$dir" && shasum -a 256 phpswitcher.tar.gz > phpswitcher.tar.gz.sha256)
+    fi
+}
+
+test_checksum_accepts_matching_archive() {
+    setup
+    local dir="$TEST_TMPDIR/archive"
+    mkdir -p "$dir/payload"
+    echo 'phpswitcher' > "$dir/payload/README.md"
+    tar -czf "$dir/phpswitcher.tar.gz" -C "$dir" payload
+    write_archive_checksum "$dir"
+
+    test_case "checksum: matching archive passes sha256sum -c"
+    (
+        # shellcheck disable=SC1091
+        source "$SCRIPT_DIR/install.sh"
+        verify_archive_checksum "$dir"
+    )
+    assert_success $? "sha256sum -c accepts the archive"
+    teardown
+}
+
+test_checksum_rejects_tampered_archive() {
+    setup
+    local dir="$TEST_TMPDIR/archive"
+    mkdir -p "$dir/payload"
+    echo 'phpswitcher' > "$dir/payload/README.md"
+    tar -czf "$dir/phpswitcher.tar.gz" -C "$dir" payload
+    write_archive_checksum "$dir"
+    printf 'x' >> "$dir/phpswitcher.tar.gz"
+
+    test_case "checksum: flipped byte fails sha256sum -c"
+    (
+        # shellcheck disable=SC1091
+        source "$SCRIPT_DIR/install.sh"
+        verify_archive_checksum "$dir"
+    )
+    assert_failure $? "sha256sum -c rejects the archive"
+    teardown
+}
+
+test_release_workflow_updates_versions() {
+    test_case "release workflow: publishes a checksum and opens version PRs"
+    local content
+    content=$(cat "$SCRIPT_DIR/.github/workflows/release.yml")
+    assert_contains "$content" "sync_existing" "Can sync an already published release"
+    assert_contains "$content" "TAP_GITHUB_TOKEN" "Requires a token for the Homebrew tap"
+    assert_contains "$content" "phpswitcher.tar.gz.sha256" "Uploads the checksum file"
+    assert_contains "$content" "PHPSWITCHER_VERSION_FALLBACK" "Updates the embedded fallback"
+    assert_contains "$content" "homebrew-phpswitcher" "Opens a pull request on the tap"
+    assert_contains "$content" "5beacccc9e73005dae5770d49f0947de73e9d7093f2f04f45238b1a402df72a3" "Checks the published v0.5.0 digest"
 }
 
 # =============================================
@@ -701,7 +841,9 @@ test_version_fallback() {
     local output
     output=$("$PHPSWITCHER" version 2>&1)
     assert_success $? "version exits successfully without a VERSION file"
-    assert_contains "$output" "phpswitcher version 0.5.0-dev" "Uses the embedded fallback"
+    local fallback
+    fallback=$(sed -n 's/^PHPSWITCHER_VERSION_FALLBACK="\([^"]*\)"/\1/p' "$PHPSWITCHER")
+    assert_contains "$output" "phpswitcher version ${fallback}" "Uses the embedded fallback"
     teardown
 }
 
@@ -882,7 +1024,13 @@ main() {
     test_extensions_install_no_version
     test_extensions_install_uses_active
     test_extensions_install_invalid_version
+    test_extensions_install_invalid_name
     test_extensions_list_subcommand
+    test_extensions_uninstall_no_extension
+    test_extensions_uninstall_no_version
+    test_extensions_uninstall_invalid_version
+    test_extensions_uninstall_invalid_name
+    test_extensions_uninstall_uses_active
 
     # Version detection
     test_detect_version_php_version_file
@@ -919,6 +1067,11 @@ main() {
 
     # Bash/Zsh completion
     test_completion_commands_list
+    test_linux_switch_includes_fpm
+    test_checksum_scripts_refuse_without_match
+    test_checksum_accepts_matching_archive
+    test_checksum_rejects_tampered_archive
+    test_release_workflow_updates_versions
 
     # Shell integration
     test_status_shell_integration_missing
