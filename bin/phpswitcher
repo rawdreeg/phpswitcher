@@ -5,6 +5,9 @@ set -e
 # Define installation directory, falling back to a default.
 export PHPSWITCHER_DIR="${PHPSWITCHER_DIR:-$HOME/.phpswitcher}"
 
+# Used when no VERSION file is installed (Composer checkouts, local git).
+PHPSWITCHER_VERSION_FALLBACK="0.5.0-dev"
+
 # Helper functions for printing messages
 echo_message() {
     # Only print if PHPSWITCHER_QUIET is not set to "true"
@@ -18,31 +21,96 @@ echo_error() {
     printf "\n\033[0;31m%s\033[0m\n" "$1" >&2
 }
 
+# Resolve the path of this script, following one symlink when readlink -f is unavailable.
+resolve_script_path() {
+    local target="$0"
+    local resolved=""
+    local link
+
+    if command -v readlink >/dev/null 2>&1; then
+        resolved=$(readlink -f "$target" 2>/dev/null || true)
+    fi
+
+    if [ -z "$resolved" ] && [ -L "$target" ]; then
+        link=$(readlink "$target" 2>/dev/null || true)
+        if [ -n "$link" ]; then
+            case "$link" in
+                /*) resolved="$link" ;;
+                *) resolved="$(cd "$(dirname "$target")" && pwd)/$link" ;;
+            esac
+        fi
+    fi
+
+    if [ -z "$resolved" ]; then
+        resolved="$target"
+    fi
+
+    printf '%s\n' "$resolved"
+}
+
+# $PHPSWITCHER_DIR/VERSION, then a VERSION file next to the script (or its parent), then the fallback.
+resolve_version() {
+    local candidate script_path script_dir
+
+    if [ -f "$PHPSWITCHER_DIR/VERSION" ]; then
+        tr -d '[:space:]' < "$PHPSWITCHER_DIR/VERSION"
+        return 0
+    fi
+
+    script_path=$(resolve_script_path)
+    script_dir=$(dirname "$script_path")
+    for candidate in "$script_dir/VERSION" "$script_dir/../VERSION"; do
+        if [ -f "$candidate" ]; then
+            tr -d '[:space:]' < "$candidate"
+            return 0
+        fi
+    done
+
+    printf '%s\n' "$PHPSWITCHER_VERSION_FALLBACK"
+}
+
 # --- Update Checking ---
 check_for_updates() {
-    # Do not check for updates if the command is 'self-update' or 'version'
-    if [[ "$1" == "self-update" || "$1" == "version" ]]; then
+    local command_name="${1:-}"
+    local cache_file last now current_version latest_version
+
+    if [ "${PHPSWITCHER_NO_UPDATE_CHECK:-}" = "1" ]; then
         return
     fi
 
-    local version_file="$PHPSWITCHER_DIR/VERSION"
-    if [ ! -f "$version_file" ]; then
-        return # Cannot check for versions if the version file doesn't exist.
+    case "$command_name" in
+        self-update|version|-v|--version|help|-h|--help|"")
+            return
+            ;;
+        use)
+            # Directory hooks call `use --quiet` on every cd.
+            if [ "$PHPSWITCHER_QUIET" = "true" ]; then
+                return
+            fi
+            ;;
+    esac
+
+    cache_file="$PHPSWITCHER_DIR/update_check"
+    if [ -f "$cache_file" ]; then
+        last=$(tr -d '[:space:]' < "$cache_file" || true)
+        now=$(date +%s)
+        if [[ "$last" =~ ^[0-9]+$ ]] && [ $((now - last)) -lt 86400 ]; then
+            return
+        fi
     fi
 
-    local current_version
-    current_version=$(cat "$version_file")
-    local latest_version
+    current_version=$(resolve_version)
     latest_version=$(curl -s --max-time 10 https://api.github.com/repos/rawdreeg/phpswitcher/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/v//')
 
     if [ -z "$latest_version" ]; then
         return # Could not fetch latest version
     fi
 
-    # Simple version comparison
+    mkdir -p "$PHPSWITCHER_DIR" 2>/dev/null || true
+    date +%s > "$cache_file" 2>/dev/null || true
+
     if [ "$current_version" != "$latest_version" ]; then
-        echo_message "A new version ($latest_version) of phpswitcher is available!"
-        echo "You are on version $current_version. Run 'phpswitcher self-update' to get the latest version."
+        echo_message "A new version ($latest_version) of phpswitcher is available! You are on version $current_version. Run 'phpswitcher self-update' to get the latest version."
     fi
 }
 
@@ -61,56 +129,101 @@ detect_os() {
 
 # --- Version Detection ---
 
-# Find and read a .php-version file by traversing up from the current directory.
-find_php_version_file() {
-    local dir="$PWD"
+# Print "X.Y<TAB>platform|require" from a composer.json, preferring config.platform.php.
+composer_php_from_file() {
+    local file="$1"
+    local compact without constraint
+
+    compact=$(tr -d '[:space:]' < "$file")
+
+    if [[ "$compact" =~ \"platform\":[{][^}]*\"php\":\"([^\"]+)\" ]]; then
+        constraint="${BASH_REMATCH[1]}"
+        if [[ "$constraint" =~ ([0-9]+\.[0-9]+) ]]; then
+            printf '%s\tplatform\n' "${BASH_REMATCH[1]}"
+            return 0
+        fi
+    fi
+
+    without=$(printf '%s' "$compact" | sed -E 's/"platform":[{][^}]*[}]//')
+    if [[ "$without" =~ \"php\":\"([^\"]+)\" ]]; then
+        constraint="${BASH_REMATCH[1]}"
+        if [[ "$constraint" =~ ([0-9]+\.[0-9]+) ]]; then
+            printf '%s\trequire\n' "${BASH_REMATCH[1]}"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# Print "version<TAB>source" for the current directory.
+# Order: nearest .php-version, then nearest composer.json, then the global default.
+detect_version_info() {
+    local dir detected info version kind
+
+    dir="$PWD"
     while [ -n "$dir" ] && [ "$dir" != "/" ]; do
         if [ -f "$dir/.php-version" ]; then
-            # Read the first line of the file and trim whitespace
-            head -n 1 "$dir/.php-version" | tr -d '[:space:]'
-            return 0
+            detected=$(head -n 1 "$dir/.php-version" | tr -d '[:space:]')
+            if [ -n "$detected" ]; then
+                printf '%s\t.php-version (%s/.php-version)\n' "$detected" "$dir"
+                return 0
+            fi
         fi
         dir=$(dirname "$dir")
     done
-    return 1 # Not found
+
+    dir="$PWD"
+    while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+        if [ -f "$dir/composer.json" ]; then
+            if info=$(composer_php_from_file "$dir/composer.json"); then
+                version=${info%%$'\t'*}
+                kind=${info#*$'\t'}
+                printf '%s\tcomposer.json (%s/composer.json, %s)\n' "$version" "$dir" "$kind"
+                return 0
+            fi
+        fi
+        dir=$(dirname "$dir")
+    done
+
+    if [ -f "$PHPSWITCHER_DIR/default_version" ]; then
+        detected=$(tr -d '[:space:]' < "$PHPSWITCHER_DIR/default_version")
+        if [ -n "$detected" ]; then
+            printf '%s\tglobal default\n' "$detected"
+            return 0
+        fi
+    fi
+
+    return 1
 }
 
 # Detect the required PHP version, prioritizing .php-version over composer.json.
 detect_version() {
-    local detected_version
+    local info version source
 
-    # 1. Prioritize .php-version file
-    if detected_version=$(find_php_version_file); then
-        echo_message "Detected target version $detected_version from .php-version file."
-        echo "$detected_version"
-        return 0
+    if ! info=$(detect_version_info); then
+        return 1
     fi
 
-    # 2. Fallback to composer.json
-    local composer_json_path="./composer.json"
-    if [ -f "$composer_json_path" ]; then
-        local constraint
-        constraint=$(grep -o '"php": *"[^"]*"' "$composer_json_path" | head -n 1)
-        if [[ "$constraint" =~ ([0-9]+\.[0-9]+) ]]; then
-            detected_version="${BASH_REMATCH[1]}"
-            echo_message "Detected target version $detected_version from composer.json."
-            echo "$detected_version"
-            return 0
-        fi
-    fi
+    version=${info%%$'\t'*}
+    source=${info#*$'\t'}
 
-    # 3. Fallback to global default version
-    local default_version_file="$PHPSWITCHER_DIR/default_version"
-    if [ -f "$default_version_file" ]; then
-        detected_version=$(cat "$default_version_file")
-        if [ -n "$detected_version" ]; then
-            echo_message "Using global default version $detected_version."
-            echo "$detected_version"
-            return 0
-        fi
-    fi
+    case "$source" in
+        .php-version*)
+            echo_message "Detected target version $version from .php-version file."
+            ;;
+        composer.json*)
+            echo_message "Detected target version $version from composer.json."
+            ;;
+        "global default")
+            echo_message "Using global default version $version."
+            ;;
+        *)
+            echo_message "Detected target version $version."
+            ;;
+    esac
 
-    return 1 # Not detected
+    printf '%s\n' "$version"
 }
 
 
@@ -195,13 +308,7 @@ command_list() {
 }
 
 command_version() {
-    local version_file="$PHPSWITCHER_DIR/VERSION"
-    if [ -f "$version_file" ]; then
-        echo "phpswitcher version $(cat "$version_file")"
-    else
-        echo_error "Version information not found. Your installation may be corrupted."
-        exit 1
-    fi
+    echo "phpswitcher version $(resolve_version)"
 }
 
 command_self_update() {
@@ -400,14 +507,33 @@ command_use_linux() {
         echo "Please run \`phpswitcher install $requested_version\` first."
         exit 1
     fi
-    echo "PHP $requested_version is installed."
+    echo_message "PHP $requested_version is installed."
 
-    # 2. Switch the active PHP version using update-alternatives
+    # 2. Switch php and the related build tools in one sudo invocation.
+    local alt_script tool tool_bin sudo_args
+    alt_script="set -e; update-alternatives --set php $(printf '%q' "$target_php_binary")"
+    for tool in phpize php-config phar phpdbg; do
+        tool_bin="/usr/bin/${tool}${requested_version}"
+        if [ -e "$tool_bin" ]; then
+            alt_script+="; update-alternatives --set $(printf '%q' "$tool") $(printf '%q' "$tool_bin") || true"
+        fi
+    done
+
+    if [ "$PHPSWITCHER_QUIET" = "true" ]; then
+        sudo_args=(sudo -n)
+    else
+        sudo_args=(sudo)
+    fi
+
     echo_message "Switching active PHP version..."
-    if sudo update-alternatives --set php "$target_php_binary"; then
+    if "${sudo_args[@]}" sh -c "$alt_script"; then
+        mkdir -p "$PHPSWITCHER_DIR"
         echo "$requested_version" > "$PHPSWITCHER_DIR/active_version"
         echo_message "Successfully switched to PHP $requested_version!"
-        echo "Run 'php --version' to verify."
+        echo_message "Run 'php --version' to verify."
+    elif [ "$PHPSWITCHER_QUIET" = "true" ]; then
+        echo_error "Could not switch to PHP $requested_version without a password. Run: phpswitcher use $requested_version"
+        exit 1
     else
         echo_error "Failed to switch to PHP $requested_version using update-alternatives."
         echo "You may need to configure it manually:"
@@ -659,6 +785,50 @@ command_default() {
 
 # --- Status Command ---
 
+# Report whether the user's shell profile sources the auto-switch hook.
+shell_integration_status() {
+    local shell_name profile needle
+
+    shell_name=$(basename "${SHELL:-}")
+    case "$shell_name" in
+        bash)
+            if [ -f "$HOME/.bashrc" ]; then
+                profile="$HOME/.bashrc"
+            else
+                profile="$HOME/.bash_profile"
+            fi
+            needle="phpswitcher-init.sh"
+            ;;
+        zsh)
+            profile="$HOME/.zshrc"
+            needle="phpswitcher-init.sh"
+            ;;
+        fish)
+            profile="$HOME/.config/fish/conf.d/phpswitcher.fish"
+            needle="phpswitcher-init.fish"
+            ;;
+        *)
+            echo ""
+            echo "Shell integration:  not checked (unsupported shell: ${SHELL:-unknown})"
+            return
+            ;;
+    esac
+
+    echo ""
+    echo "Shell integration:  $profile"
+    if [ -f "$profile" ] && grep -q "$needle" "$profile"; then
+        echo "  enabled"
+    else
+        echo "  not installed"
+        echo "  Auto-switch runs only after the shell hook is sourced."
+        if [ "$shell_name" = "fish" ]; then
+            echo "  Re-run the installer, or add: source \"\$PHPSWITCHER_DIR/phpswitcher-init.fish\""
+        else
+            echo "  Re-run the installer, or add: source \"\$PHPSWITCHER_DIR/phpswitcher-init.sh\""
+        fi
+    fi
+}
+
 command_status() {
     echo "PHP Switcher Status"
     echo "==================="
@@ -667,7 +837,7 @@ command_status() {
     local active_version=""
     local active_version_file="$PHPSWITCHER_DIR/active_version"
     if [ -f "$active_version_file" ]; then
-        active_version=$(cat "$active_version_file")
+        active_version=$(tr -d '[:space:]' < "$active_version_file")
     fi
 
     local php_path=""
@@ -701,40 +871,10 @@ command_status() {
     echo ""
     echo "Version detection for current directory:"
 
-    local detected_source="none"
-    local detected_ver=""
-
-    # Check .php-version
-    local dir="$PWD"
-    while [ -n "$dir" ] && [ "$dir" != "/" ]; do
-        if [ -f "$dir/.php-version" ]; then
-            detected_ver=$(head -n 1 "$dir/.php-version" | tr -d '[:space:]')
-            detected_source=".php-version ($dir/.php-version)"
-            break
-        fi
-        dir=$(dirname "$dir")
-    done
-
-    # Check composer.json
-    if [ -z "$detected_ver" ] && [ -f "./composer.json" ]; then
-        local constraint
-        constraint=$(grep -o '"php": *"[^"]*"' "./composer.json" | head -n 1)
-        if [[ "$constraint" =~ ([0-9]+\.[0-9]+) ]]; then
-            detected_ver="${BASH_REMATCH[1]}"
-            detected_source="composer.json (./composer.json)"
-        fi
-    fi
-
-    # Check default
-    if [ -z "$detected_ver" ]; then
-        local default_version_file="$PHPSWITCHER_DIR/default_version"
-        if [ -f "$default_version_file" ]; then
-            detected_ver=$(cat "$default_version_file")
-            detected_source="global default"
-        fi
-    fi
-
-    if [ -n "$detected_ver" ]; then
+    local info detected_ver detected_source
+    if info=$(detect_version_info); then
+        detected_ver=${info%%$'\t'*}
+        detected_source=${info#*$'\t'}
         echo "  Detected version: $detected_ver"
         echo "  Source:           $detected_source"
     else
@@ -745,10 +885,12 @@ command_status() {
     echo ""
     local default_version_file="$PHPSWITCHER_DIR/default_version"
     if [ -f "$default_version_file" ]; then
-        echo "Global default:     $(cat "$default_version_file")"
+        echo "Global default:     $(tr -d '[:space:]' < "$default_version_file")"
     else
         echo "Global default:     (not set)"
     fi
+
+    shell_integration_status
 }
 
 # --- Extensions Command ---
@@ -878,11 +1020,13 @@ command_help() {
     echo ""
     echo "Available commands:"
     echo "  install [<version>]    Install a specific PHP version (e.g., 8.1)."
-    echo "                         If <version> is omitted, it attempts to detect from .php-version, composer.json, or default."
+    echo "                         If <version> is omitted, it detects from .php-version, composer.json"
+    echo "                         (config.platform.php, then require.php, walking parent directories), or default."
     echo "  uninstall <version>    Uninstall a specific PHP version (e.g., 7.4)."
     echo "                         The currently active version cannot be uninstalled."
     echo "  use [<version>]        Switch the active PHP version."
-    echo "                         If <version> is omitted, it attempts to detect from .php-version, composer.json, or default."
+    echo "                         If <version> is omitted, it detects from .php-version, composer.json"
+    echo "                         (config.platform.php, then require.php, walking parent directories), or default."
     echo "  list                   List all installed PHP versions and show the active one."
     echo "  default [<version>]    Set or show the global default PHP version."
     echo "                         Use --unset to remove the default."
