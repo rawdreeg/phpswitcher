@@ -17,6 +17,7 @@ TEST_TMPDIR=""
 setup() {
     TEST_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/phpswitcher-unit.XXXXXXXX")
     export PHPSWITCHER_DIR="$TEST_TMPDIR"
+    export PHPSWITCHER_NO_UPDATE_CHECK=1
     mkdir -p "$PHPSWITCHER_DIR"
     echo "0.3.1" > "$PHPSWITCHER_DIR/VERSION"
 }
@@ -521,7 +522,8 @@ test_help_mentions_default_in_detection() {
     test_case "help: mentions default in version detection descriptions"
     local output
     output=$("$PHPSWITCHER" help 2>&1)
-    assert_contains "$output" ".php-version, composer.json, or default" "Detection docs include default"
+    assert_contains "$output" "config.platform.php" "Detection docs include platform.php"
+    assert_contains "$output" "or default." "Detection docs include default"
     teardown
 }
 
@@ -591,14 +593,14 @@ test_fish_completion_exists() {
 }
 
 test_fish_init_contents() {
-    test_case "fish init: contains auto-switch function"
+    test_case "fish init: delegates detection to phpswitcher"
     local content
     content=$(cat "$SCRIPT_DIR/bin/phpswitcher-init.fish")
     assert_contains "$content" "_phpswitcher_auto_switch" "Has auto-switch function"
     assert_contains "$content" "--on-variable PWD" "Uses PWD variable event"
-    assert_contains "$content" ".php-version" "Checks .php-version"
-    assert_contains "$content" "composer.json" "Checks composer.json"
-    assert_contains "$content" "default_version" "Checks default version"
+    assert_contains "$content" "phpswitcher status" "Asks phpswitcher for the detected version"
+    assert_contains "$content" "phpswitcher use" "Switches through phpswitcher use"
+    assert_contains "$content" "PHPSWITCHER_NO_UPDATE_CHECK" "Skips the update check on cd"
 }
 
 test_fish_completion_contents() {
@@ -625,6 +627,220 @@ test_completion_commands_list() {
     assert_contains "$content" "default" "Completion has default"
     assert_contains "$content" "status" "Completion has status"
     assert_contains "$content" "extensions" "Completion has extensions"
+    assert_contains "$content" "list install" "Bash completion offers extensions subcommands"
+}
+
+# =============================================
+# COMPOSER DETECTION
+# =============================================
+
+test_detect_platform_over_require() {
+    setup
+    local test_dir="$TEST_TMPDIR/project"
+    mkdir -p "$test_dir"
+    cat > "$test_dir/composer.json" << 'EOF'
+{
+  "require": {
+    "php": ">=7.4"
+  },
+  "config": {
+    "platform": {
+      "php": "8.2.9"
+    }
+  }
+}
+EOF
+
+    test_case "detect_version: config.platform.php wins over require.php"
+    local output
+    output=$(cd "$test_dir" && "$PHPSWITCHER" status 2>&1)
+    assert_contains "$output" "Detected version: 8.2" "Platform pin 8.2 wins"
+    assert_contains "$output" "platform" "Source notes platform"
+    assert_not_contains "$output" "Detected version: 7.4" "require.php is not selected"
+    teardown
+}
+
+test_detect_parent_composer_json() {
+    setup
+    local test_dir="$TEST_TMPDIR/project"
+    mkdir -p "$test_dir/subdir"
+    echo '{"require":{"php":"^8.3"}}' > "$test_dir/composer.json"
+
+    test_case "detect_version: finds composer.json in a parent directory"
+    local output
+    output=$(cd "$test_dir/subdir" && "$PHPSWITCHER" status 2>&1)
+    assert_contains "$output" "Detected version: 8.3" "Detected 8.3 from parent composer.json"
+    assert_contains "$output" "composer.json" "Source is composer.json"
+    teardown
+}
+
+test_detect_nearest_composer_json() {
+    setup
+    local test_dir="$TEST_TMPDIR/project"
+    mkdir -p "$test_dir/nested"
+    echo '{"require":{"php":"^8.0"}}' > "$test_dir/composer.json"
+    echo '{"require":{"php":"^8.3"}}' > "$test_dir/nested/composer.json"
+
+    test_case "detect_version: nearest composer.json wins"
+    local output
+    output=$(cd "$test_dir/nested" && "$PHPSWITCHER" status 2>&1)
+    assert_contains "$output" "Detected version: 8.3" "Nested composer.json wins"
+    assert_not_contains "$output" "Detected version: 8.0" "Parent composer.json is ignored"
+    teardown
+}
+
+# =============================================
+# VERSION RESOLUTION
+# =============================================
+
+test_version_fallback() {
+    setup
+    rm -f "$PHPSWITCHER_DIR/VERSION"
+
+    test_case "version: falls back when no VERSION file exists"
+    local output
+    output=$("$PHPSWITCHER" version 2>&1)
+    assert_success $? "version exits successfully without a VERSION file"
+    assert_contains "$output" "phpswitcher version 0.5.0-dev" "Uses the embedded fallback"
+    teardown
+}
+
+test_version_beside_script() {
+    setup
+    rm -f "$PHPSWITCHER_DIR/VERSION"
+    mkdir -p "$TEST_TMPDIR/bin"
+    cp "$PHPSWITCHER" "$TEST_TMPDIR/bin/phpswitcher"
+    chmod +x "$TEST_TMPDIR/bin/phpswitcher"
+    echo "9.9.9" > "$TEST_TMPDIR/bin/VERSION"
+
+    test_case "version: reads VERSION next to the script"
+    local output
+    output=$("$TEST_TMPDIR/bin/phpswitcher" version 2>&1)
+    assert_contains "$output" "phpswitcher version 9.9.9" "Uses the sibling VERSION file"
+    teardown
+}
+
+test_version_parent_of_script() {
+    setup
+    local state="$TEST_TMPDIR/state"
+    mkdir -p "$state" "$TEST_TMPDIR/bin"
+    export PHPSWITCHER_DIR="$state"
+    cp "$PHPSWITCHER" "$TEST_TMPDIR/bin/phpswitcher"
+    chmod +x "$TEST_TMPDIR/bin/phpswitcher"
+    echo "8.8.8" > "$TEST_TMPDIR/VERSION"
+
+    test_case "version: reads VERSION above the bin directory"
+    local output
+    output=$("$TEST_TMPDIR/bin/phpswitcher" version 2>&1)
+    assert_contains "$output" "phpswitcher version 8.8.8" "Uses the parent VERSION file"
+    teardown
+}
+
+# =============================================
+# SHELL INTEGRATION
+# =============================================
+
+test_status_shell_integration_missing() {
+    setup
+    local home="$TEST_TMPDIR/home"
+    mkdir -p "$home"
+    printf 'export PHPSWITCHER_DIR="%s"\n' "$PHPSWITCHER_DIR" > "$home/.bashrc"
+
+    test_case "status: reports a profile that does not source the hook"
+    local output
+    output=$(HOME="$home" SHELL=/bin/bash "$PHPSWITCHER" status 2>&1)
+    assert_contains "$output" "Shell integration:" "Status has a shell integration section"
+    assert_contains "$output" "not installed" "Hook is reported missing"
+    assert_contains "$output" "$home/.bashrc" "Profile path is shown"
+    teardown
+}
+
+test_status_shell_integration_enabled() {
+    setup
+    local home="$TEST_TMPDIR/home"
+    mkdir -p "$home"
+    printf 'source "$PHPSWITCHER_DIR/phpswitcher-init.sh"\n' > "$home/.bashrc"
+
+    test_case "status: reports an enabled shell hook"
+    local output
+    output=$(HOME="$home" SHELL=/bin/bash "$PHPSWITCHER" status 2>&1)
+    assert_contains "$output" "enabled" "Hook is reported enabled"
+    teardown
+}
+
+test_installer_repairs_missing_hook() {
+    setup
+    local home="$TEST_TMPDIR/home"
+    local install_dir="$TEST_TMPDIR/install-root"
+    mkdir -p "$home" "$install_dir"
+    printf 'export PHPSWITCHER_DIR="%s"\n' "$install_dir" > "$home/.bashrc"
+
+    test_case "installer: adds hook lines when PHPSWITCHER_DIR is already set"
+    (
+        export HOME="$home"
+        export SHELL=/bin/bash
+        export PHPSWITCHER_DIR="$install_dir"
+        # shellcheck disable=SC1091
+        source "$SCRIPT_DIR/install.sh"
+        configure_shell_profile
+    )
+    assert_success $? "configure_shell_profile exits successfully"
+    local profile
+    profile=$(cat "$home/.bashrc")
+    assert_contains "$profile" "phpswitcher-init.sh" "Init hook was added"
+    assert_contains "$profile" "phpswitcher-completion.sh" "Completion hook was added"
+
+    test_case "installer: does not duplicate hook lines"
+    (
+        export HOME="$home"
+        export SHELL=/bin/bash
+        export PHPSWITCHER_DIR="$install_dir"
+        # shellcheck disable=SC1091
+        source "$SCRIPT_DIR/install.sh"
+        configure_shell_profile
+    )
+    local count
+    count=$(grep -c "phpswitcher-init.sh" "$home/.bashrc")
+    if [ "$count" -eq 1 ]; then
+        report_success "Init hook appears once"
+    else
+        report_failure "Init hook appears $count times"
+    fi
+    teardown
+}
+
+test_installer_repairs_fish_hook() {
+    setup
+    local home="$TEST_TMPDIR/home"
+    local install_dir="$TEST_TMPDIR/install-root"
+    mkdir -p "$home/.config/fish/conf.d" "$install_dir"
+    printf 'set -gx PHPSWITCHER_DIR "%s"\n' "$install_dir" > "$home/.config/fish/conf.d/phpswitcher.fish"
+
+    test_case "installer: adds Fish hook lines to an existing config"
+    (
+        export HOME="$home"
+        export SHELL=/usr/bin/fish
+        export PHPSWITCHER_DIR="$install_dir"
+        # shellcheck disable=SC1091
+        source "$SCRIPT_DIR/install.sh"
+        configure_shell_profile
+    )
+    assert_success $? "configure_shell_profile exits successfully for fish"
+    local profile
+    profile=$(cat "$home/.config/fish/conf.d/phpswitcher.fish")
+    assert_contains "$profile" "phpswitcher-init.fish" "Fish init hook was added"
+    assert_contains "$profile" "phpswitcher-completion.fish" "Fish completion hook was added"
+    teardown
+}
+
+test_bash_init_delegates() {
+    test_case "bash init: delegates detection to phpswitcher"
+    local content
+    content=$(cat "$SCRIPT_DIR/bin/phpswitcher-init.sh")
+    assert_contains "$content" "phpswitcher status" "Asks phpswitcher for the detected version"
+    assert_contains "$content" "phpswitcher use" "Switches through phpswitcher use"
+    assert_contains "$content" "--quiet" "Auto-switch is quiet"
+    assert_contains "$content" "PHPSWITCHER_NO_UPDATE_CHECK" "Skips the update check on cd"
 }
 
 # =============================================
@@ -675,6 +891,9 @@ main() {
     test_detect_version_no_detection
     test_detect_version_priority_order
     test_detect_version_composer_over_default
+    test_detect_platform_over_require
+    test_detect_parent_composer_json
+    test_detect_nearest_composer_json
 
     # Help
     test_help_includes_new_commands
@@ -682,6 +901,9 @@ main() {
 
     # Version
     test_version_command
+    test_version_fallback
+    test_version_beside_script
+    test_version_parent_of_script
 
     # Error handling
     test_unknown_command
@@ -697,6 +919,13 @@ main() {
 
     # Bash/Zsh completion
     test_completion_commands_list
+
+    # Shell integration
+    test_status_shell_integration_missing
+    test_status_shell_integration_enabled
+    test_installer_repairs_missing_hook
+    test_installer_repairs_fish_hook
+    test_bash_init_delegates
 
     echo ""
     echo "--------------------------------------------"

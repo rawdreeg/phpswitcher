@@ -15,7 +15,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install shellcheck
         run: |
@@ -28,6 +28,19 @@ jobs:
       - name: Run shellcheck
         run: shellcheck bin/phpswitcher bin/phpswitcher-init.sh install.sh
 
+  unit:
+    name: Unit Tests
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run unit tests
+        run: |
+          chmod +x tests/unit-tests.sh
+          ./tests/unit-tests.sh
+
   test:
     name: Run Tests
     needs: lint
@@ -37,7 +50,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Make scripts executable
         run: |
