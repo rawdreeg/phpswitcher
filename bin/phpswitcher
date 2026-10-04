@@ -6,7 +6,7 @@ set -e
 export PHPSWITCHER_DIR="${PHPSWITCHER_DIR:-$HOME/.phpswitcher}"
 
 # Used when no VERSION file is installed (Composer checkouts, local git).
-PHPSWITCHER_VERSION_FALLBACK="0.5.0-dev"
+PHPSWITCHER_VERSION_FALLBACK="0.5.0"
 
 # Helper functions for printing messages
 echo_message() {
