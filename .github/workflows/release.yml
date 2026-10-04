@@ -84,6 +84,12 @@ jobs:
           curl -fsSL --retry 3 -o phpswitcher.tar.gz \
             "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/phpswitcher.tar.gz"
 
+      - name: Run unit tests
+        if: ${{ !inputs.sync_existing }}
+        run: |
+          chmod +x tests/unit-tests.sh
+          ./tests/unit-tests.sh
+
       - name: Set version in source
         env:
           VERSION: ${{ inputs.version }}
@@ -114,12 +120,6 @@ jobs:
             fi
           fi
           echo "RELEASE_SHA256=${actual}" >> "$GITHUB_ENV"
-
-      - name: Run unit tests against build
-        if: ${{ !inputs.sync_existing }}
-        run: |
-          chmod +x tests/unit-tests.sh
-          ./tests/unit-tests.sh
 
       - name: Verify artifact
         if: ${{ !inputs.sync_existing }}
