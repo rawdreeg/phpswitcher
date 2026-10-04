@@ -1,9 +1,9 @@
 class Phpswitcher < Formula
   desc "Manage and switch between multiple PHP versions"
   homepage "https://github.com/rawdreeg/phpswitcher"
-  url "https://github.com/rawdreeg/phpswitcher/releases/download/v0.5.0/phpswitcher.tar.gz"
-  version "0.5.0"
-  sha256 "211479523db4c7c38d8f43fc441e13cf1ed5ed04b44e75ed636ccd1da7713c8f"
+  url "https://github.com/rawdreeg/phpswitcher/releases/download/v0.6.0/phpswitcher.tar.gz"
+  version "0.6.0"
+  sha256 "843493e6428fccb2b60c62f32336101f2c6e9ac2579a9e0bad55a13199ee741a"
   license "MIT"
   head "https://github.com/rawdreeg/phpswitcher.git", branch: "main"
 
