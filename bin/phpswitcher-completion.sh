@@ -8,8 +8,8 @@ _phpswitcher_commands="install uninstall use list default status extensions self
 
 # Get installed PHP versions for completing version arguments.
 _phpswitcher_installed_versions() {
-    # Version names for completion only. Arch vs Debian command choice lives
-    # in linux_is_arch inside bin/phpswitcher, which Bash and Fish both call.
+    # Version names for completion only. Family choice lives in
+    # detect_linux_family inside bin/phpswitcher, which Bash and Fish both call.
     if command -v brew >/dev/null 2>&1; then
         brew list --formula 2>/dev/null | grep '^php@' | sed 's/php@//'
     elif command -v update-alternatives >/dev/null 2>&1; then
