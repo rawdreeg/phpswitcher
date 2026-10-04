@@ -6,7 +6,7 @@ A simple CLI tool to manage multiple PHP versions on macOS and Linux.
 
 ## Features
 
-*   Install specific PHP versions (via Homebrew for macOS, or APT for Linux).
+*   Install specific PHP versions (via Homebrew on macOS, APT on Debian/Ubuntu, or the AUR on Arch).
 *   Uninstall PHP versions you no longer need.
 *   Switch the active PHP version.
 *   List all installed PHP versions.
@@ -21,6 +21,7 @@ A simple CLI tool to manage multiple PHP versions on macOS and Linux.
 
 *   **macOS:** Requires **Homebrew** for installing and managing PHP versions.
 *   **Linux (Debian/Ubuntu):** Requires `apt` and the `software-properties-common` package. `sudo` is required for installing and switching versions.
+*   **Linux (Arch):** Side-by-side versions are AUR packages (`php81`, `php82`, and the same pattern through current versions such as `php85`). The official repositories ship one unversioned `php` package. `pacman` cannot build AUR packages; install **paru** or **yay** (paru is used when both are installed). `sudo` is required to install and remove packages. Switching itself does not need a password.
 
 ## Installation
 
@@ -102,7 +103,9 @@ cd my-project-using-php7.4/
 phpswitcher use
 ```
 
-On Linux, `use` also switches `phpize`, `php-config`, `phar`, `phar.phar`, `phpdbg`, and `php-fpm` when those binaries are installed. Versioned FPM services such as `php8.1-fpm` are left running; the `php-fpm` alternative only moves the unversioned binary.
+On Debian and Ubuntu, `use` also switches `phpize`, `php-config`, `phar`, `phar.phar`, `phpdbg`, and `php-fpm` with `update-alternatives` when those binaries are installed. Versioned FPM services such as `php8.1-fpm` are left running; the `php-fpm` alternative only moves the unversioned binary.
+
+On Arch, those tools are versioned without a dot. For PHP 8.1 the AUR packages install `/usr/bin/php81` (`php81-cli`), `/usr/bin/phpize81` and `/usr/bin/php-config81` (`php81`), `/usr/bin/phar81` and `/usr/bin/phar.phar81` (`php81-cli`), `/usr/bin/phpdbg81` (`php81-phpdbg`), and `/usr/bin/php-fpm81` (`php81-fpm`). `use` links `php` and those tool names in `~/.phpswitcher/bin` (the directory the installer puts first on `PATH`) to whichever of those binaries exist. The systemd unit `php81-fpm` is left running. `--quiet` does not wait for a sudo password.
 
 **Set a global default PHP version:**
 
@@ -168,7 +171,7 @@ phpswitcher extensions uninstall xdebug
 phpswitcher extensions uninstall redis 8.1
 ```
 
-On Linux, extensions are installed and removed via `apt` (e.g., `php8.1-xdebug`). On macOS, PECL is used.
+On Debian and Ubuntu, extensions are installed and removed via `apt` (e.g., `php8.1-xdebug`). On Arch, the package name drops the dot (`php81-xdebug`) and is installed with paru or yay; removal uses `pacman`. On macOS, PECL is used.
 
 **Show Version:**
 
